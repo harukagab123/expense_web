@@ -9,7 +9,11 @@ from app.models.file import StoredFile
 from app.models.statement import Statement
 from app.models.transaction import Transaction
 from app.schemas.attention import AttentionCountResponse, AttentionItemResponse, AttentionListResponse
-from app.services.attention.rules import statement_attention_items, transaction_attention_items
+from app.services.attention.rules import (
+    statement_attention_items,
+    statement_transaction_review_attention_items,
+    transaction_attention_items,
+)
 from app.services.attention.types import SEVERITY_ERROR, SEVERITY_REVIEW, AttentionItem
 
 
@@ -41,6 +45,7 @@ def _collect_attention_items(session: Session) -> list[AttentionItem]:
         session.execute(
             select(Statement).options(
                 selectinload(Statement.file).selectinload(StoredFile.folder),
+                selectinload(Statement.transactions),
             )
         ).scalars().all()
     )
@@ -59,6 +64,7 @@ def _collect_attention_items(session: Session) -> list[AttentionItem]:
     items: list[AttentionItem] = []
     for statement in statements:
         items.extend(statement_attention_items(statement))
+        items.extend(statement_transaction_review_attention_items(statement))
     for transaction in transactions:
         items.extend(transaction_attention_items(transaction))
     return items

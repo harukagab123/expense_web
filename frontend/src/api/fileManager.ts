@@ -27,6 +27,8 @@ import type {
   TransactionNormalizationPayload,
   TransactionNormalizationRunResponse,
   TransactionPayload,
+  TransactionReviewBulkPayload,
+  TransactionReviewBulkUpdateResponse,
   TransactionReviewPayload,
   StoredFile,
   UploadBatchResponse,
@@ -304,6 +306,15 @@ export async function updateTransactionReview(
   payload: TransactionReviewPayload,
 ): Promise<StatementTransaction> {
   return requestJson<StatementTransaction>(`/api/transactions/${transactionId}/review`, {
+    method: "PATCH",
+    json: payload,
+  });
+}
+
+export async function bulkUpdateTransactionReview(
+  payload: TransactionReviewBulkPayload,
+): Promise<TransactionReviewBulkUpdateResponse> {
+  return requestJson<TransactionReviewBulkUpdateResponse>("/api/transactions/bulk-review", {
     method: "PATCH",
     json: payload,
   });

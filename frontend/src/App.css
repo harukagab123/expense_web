@@ -249,6 +249,24 @@ button:hover,
   color: #8a1f11;
 }
 
+.reviewed-list-button {
+  border-color: #2f855a;
+  color: #ffffff;
+  background: #2f855a;
+}
+
+.reviewed-list-button:hover {
+  border-color: #276749;
+  background: #276749;
+}
+
+.reviewed-list-button:disabled {
+  border-color: #9fb3c8;
+  color: #486581;
+  background: #e4e7eb;
+  cursor: default;
+}
+
 .manager-toolbar,
 .breadcrumbs,
 .manager-layout {
@@ -1074,14 +1092,16 @@ input[type="file"] {
 }
 
 .attention-field--active input,
-.attention-field--active select {
+.attention-field--active select,
+button.attention-field--active {
   border-color: #d97706;
   outline: 3px solid rgba(217, 119, 6, 0.28);
   box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.16);
 }
 
 .attention-field--soft input,
-.attention-field--soft select {
+.attention-field--soft select,
+button.attention-field--soft {
   border-color: #d97706;
 }
 

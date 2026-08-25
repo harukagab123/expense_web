@@ -38,6 +38,8 @@ from app.schemas.transaction import (
     TransactionInclusionBulkUpdate,
     TransactionInclusionBulkUpdateResponse,
     TransactionInclusionUpdate,
+    TransactionReviewBulkUpdate,
+    TransactionReviewBulkUpdateResponse,
     TransactionReviewUpdate,
     TransactionTypeBulkUpdate,
     TransactionTypeBulkUpdateResponse,
@@ -76,6 +78,7 @@ from app.services.transaction_extraction.service import (
     update_transaction as update_transaction_service,
 )
 from app.services.transaction_review.service import (
+    bulk_update_transaction_review,
     bulk_update_transaction_inclusion,
     update_transaction_inclusion,
     update_transaction_review,
@@ -318,6 +321,18 @@ def bulk_update_transaction_inclusion_endpoint(
 ) -> TransactionInclusionBulkUpdateResponse:
     transactions, skipped_transaction_ids = bulk_update_transaction_inclusion(db, payload)
     return TransactionInclusionBulkUpdateResponse(
+        transactions=transactions,
+        skipped_transaction_ids=skipped_transaction_ids,
+    )
+
+
+@router.patch("/transactions/bulk-review", response_model=TransactionReviewBulkUpdateResponse)
+def bulk_update_transaction_review_endpoint(
+    payload: TransactionReviewBulkUpdate,
+    db: Session = Depends(get_db),
+) -> TransactionReviewBulkUpdateResponse:
+    transactions, skipped_transaction_ids = bulk_update_transaction_review(db, payload)
+    return TransactionReviewBulkUpdateResponse(
         transactions=transactions,
         skipped_transaction_ids=skipped_transaction_ids,
     )

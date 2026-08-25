@@ -11,6 +11,7 @@ from app.models.transaction import Transaction
 from app.schemas.transaction import (
     TransactionInclusionBulkUpdate,
     TransactionInclusionUpdate,
+    TransactionReviewBulkUpdate,
     TransactionReviewUpdate,
 )
 
@@ -180,6 +181,36 @@ def update_transaction_review(
     session.commit()
     session.refresh(transaction)
     return transaction
+
+
+def bulk_update_transaction_review(
+    session: Session,
+    payload: TransactionReviewBulkUpdate,
+) -> tuple[list[Transaction], list[int]]:
+    transactions = list(
+        session.execute(select(Transaction).where(Transaction.id.in_(payload.transaction_ids))).scalars().all()
+    )
+    found_ids = {transaction.id for transaction in transactions}
+    skipped_ids = [transaction_id for transaction_id in payload.transaction_ids if transaction_id not in found_ids]
+    now = datetime.now(UTC)
+
+    for transaction in transactions:
+        if transaction.excluded:
+            skipped_ids.append(transaction.id)
+            continue
+        initialize_phase8_state(transaction, now=now)
+        transaction.review_status = payload.review_status
+        transaction.review_source = (
+            REVIEW_USER_REVIEWED
+            if payload.review_status == REVIEW_REVIEWED
+            else REVIEW_USER_MARKED_NEEDS_REVIEW
+        )
+        transaction.review_updated_at = now
+
+    session.commit()
+    for transaction in transactions:
+        session.refresh(transaction)
+    return transactions, skipped_ids
 
 
 def selected_amount(transactions: list[Transaction]) -> Decimal:

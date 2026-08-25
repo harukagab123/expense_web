@@ -2,6 +2,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import "./App.css";
 import {
+  bulkUpdateTransactionReview,
   bulkUpdateTransactionTypes,
   bulkUpdateTransactionCategories,
   bulkUpdateTransactionInclusion,
@@ -57,6 +58,7 @@ import type {
   TransactionInclusionPayload,
   TransactionNormalizationPayload,
   TransactionPayload,
+  TransactionReviewBulkPayload,
   TransactionReviewPayload,
   TransactionTypeBulkPayload,
   TransactionTypePayload,
@@ -321,12 +323,6 @@ const categoryStatusLabels: Record<string, string> = {
   NEEDS_REVIEW: "Needs Review",
   USER_CONFIRMED: "User Confirmed",
   NOT_APPLICABLE: "Not Applicable",
-};
-
-const reviewStatusLabels: Record<string, string> = {
-  PENDING: "Pending",
-  NEEDS_REVIEW: "Needs Review",
-  REVIEWED: "Reviewed",
 };
 
 const directionLabels: Record<string, string> = {
@@ -2362,6 +2358,14 @@ function FileDetails({
     return response.skipped_transaction_ids;
   }
 
+  async function handleBulkUpdateTransactionReview(payload: TransactionReviewBulkPayload): Promise<number[]> {
+    setTransactionError("");
+    const response = await bulkUpdateTransactionReview(payload);
+    setTransactions((current) => mergeUpdatedTransactions(current, response.transactions));
+    await onAttentionRefresh();
+    return response.skipped_transaction_ids;
+  }
+
   async function handleExcludeTransaction(transactionId: number) {
     if (!statement) {
       return;
@@ -2415,7 +2419,12 @@ function FileDetails({
       <PreviewPane file={file} />
       {isPdf || statement ? (
         <StatementPanel
-          attentionTarget={attentionTarget?.targetSection === "statement" ? attentionTarget : null}
+          attentionTarget={
+            attentionTarget?.targetSection === "statement" &&
+            attentionTarget.targetField !== "transaction_list_review"
+              ? attentionTarget
+              : null
+          }
           error={statementError}
           isAnalyzing={isAnalyzing}
           isLoading={isStatementLoading}
@@ -2448,10 +2457,20 @@ function FileDetails({
           onExclude={handleExcludeTransaction}
           onExtract={handleExtractTransactions}
           onBulkEditInclusion={handleBulkUpdateTransactionInclusion}
+          onBulkEditReview={handleBulkUpdateTransactionReview}
           onNormalize={handleNormalizeTransactions}
           onTransactionsUpdate={(updater) => setTransactions((current) => updater(current))}
           attentionTarget={
-            attentionTarget?.targetSection === "transaction" && hasLoadedTransactions ? attentionTarget : null
+            hasLoadedTransactions &&
+            (
+              attentionTarget?.targetSection === "transaction" ||
+              (
+                attentionTarget?.targetSection === "statement" &&
+                attentionTarget.targetField === "transaction_list_review"
+              )
+            )
+              ? attentionTarget
+              : null
           }
           onAttentionRefresh={onAttentionRefresh}
           onAttentionTargetConsumed={onAttentionTargetConsumed}
@@ -2819,6 +2838,7 @@ function TransactionPanel({
   onAdd,
   onBulkEditCategories,
   onBulkEditInclusion,
+  onBulkEditReview,
   onBulkEditTypes,
   onCategorize,
   onClassifyTypes,
@@ -2847,6 +2867,7 @@ function TransactionPanel({
   onAdd: (payload: Required<TransactionPayload>) => Promise<void>;
   onBulkEditCategories: (payload: TransactionCategoryBulkPayload) => Promise<number[]>;
   onBulkEditInclusion: (payload: TransactionInclusionBulkPayload) => Promise<number[]>;
+  onBulkEditReview: (payload: TransactionReviewBulkPayload) => Promise<number[]>;
   onBulkEditTypes: (payload: TransactionTypeBulkPayload) => Promise<number[]>;
   onCategorize: () => void;
   onClassifyTypes: () => void;
@@ -2913,6 +2934,7 @@ function TransactionPanel({
   const [isSavingBulkType, setIsSavingBulkType] = useState(false);
   const [isSavingBulkCategory, setIsSavingBulkCategory] = useState(false);
   const [isSavingBulkInclusion, setIsSavingBulkInclusion] = useState(false);
+  const [isSavingBulkReview, setIsSavingBulkReview] = useState(false);
   const [inclusionError, setInclusionError] = useState("");
   const [inclusionNotice, setInclusionNotice] = useState("");
   const [savingInclusionIds, setSavingInclusionIds] = useState<Set<number>>(new Set());
@@ -2932,6 +2954,15 @@ function TransactionPanel({
   const phase8ReviewCount = transactions.filter(transactionNeedsPhase8Review).length;
   const includedCount = transactions.filter(transactionIncluded).length;
   const excludedFromSummaryCount = transactions.length - includedCount;
+  const activeTransactionIds = useMemo(
+    () => transactions.filter((transaction) => !transaction.excluded).map((transaction) => transaction.id),
+    [transactions],
+  );
+  const allTransactionsReviewed =
+    activeTransactionIds.length > 0 &&
+    transactions
+      .filter((transaction) => activeTransactionIds.includes(transaction.id))
+      .every((transaction) => transactionReviewStatus(transaction) === "REVIEWED");
   const selectedTotalCents = selectedAmountCents(transactions);
   const hasExtraction = latestExtraction !== null;
   const extractButtonText = hasExtraction ? "Re-extract Transactions" : "Extract Transactions";
@@ -3031,11 +3062,22 @@ function TransactionPanel({
   }, [transactions]);
 
   useEffect(() => {
-    if (!attentionTarget || attentionTarget.transactionId === null) {
+    if (!attentionTarget) {
       return;
     }
     const attentionKey = `${attentionTarget.attentionId}:${attentionTarget.requestedAt}`;
     if (handledAttentionRef.current === attentionKey || isLoading) {
+      return;
+    }
+
+    const targetField = attentionTarget.targetField ?? "transaction_detail";
+    if (attentionTarget.transactionId === null) {
+      if (targetField !== "transaction_list_review") {
+        return;
+      }
+      handledAttentionRef.current = attentionKey;
+      onAttentionTargetConsumed();
+      setActiveAttentionFocus({ ...attentionTarget, targetField, softened: false });
       return;
     }
 
@@ -3048,7 +3090,6 @@ function TransactionPanel({
       return;
     }
 
-    const targetField = attentionTarget.targetField ?? "transaction_detail";
     handledAttentionRef.current = attentionKey;
     onAttentionTargetConsumed();
     setTransactionSearch("");
@@ -3085,9 +3126,10 @@ function TransactionPanel({
   const activeAttentionTransactionId = activeAttentionFocus?.transactionId ?? null;
   const activeAttentionRequestedAt = activeAttentionFocus?.requestedAt ?? null;
   const activeAttentionTargetField = activeAttentionFocus?.targetField ?? null;
+  const activeAttentionTargetsListReview = activeAttentionTargetField === "transaction_list_review";
 
   useEffect(() => {
-    if (activeAttentionTransactionId === null || activeAttentionRequestedAt === null) {
+    if (activeAttentionRequestedAt === null) {
       return;
     }
 
@@ -3095,6 +3137,18 @@ function TransactionPanel({
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
+        if (targetField === "transaction_list_review") {
+          const control = document.querySelector<HTMLElement>('[data-attention-field="transaction_list_review"]');
+          control?.scrollIntoView({
+            block: "center",
+            behavior: prefersReducedMotion ? "auto" : "smooth",
+          });
+          control?.focus({ preventScroll: true });
+          return;
+        }
+        if (activeAttentionTransactionId === null) {
+          return;
+        }
         const row = document.querySelector<HTMLElement>(`[data-transaction-id="${activeAttentionTransactionId}"]`);
         const scrollContainer = row?.closest<HTMLElement>(".details-pane");
         if (row && scrollContainer && scrollContainer.scrollHeight > scrollContainer.clientHeight + 1) {
@@ -3380,6 +3434,33 @@ function TransactionPanel({
     void handleBulkInclusion(transactions.map((transaction) => transaction.id), include, "total");
   }
 
+  async function handleMarkListReviewed() {
+    if (activeTransactionIds.length === 0) {
+      setInclusionError("No transactions are available to review.");
+      setInclusionNotice("");
+      return;
+    }
+
+    setIsSavingBulkReview(true);
+    setInclusionError("");
+    setInclusionNotice("");
+    try {
+      const skippedIds = await onBulkEditReview({
+        transaction_ids: activeTransactionIds,
+        review_status: "REVIEWED",
+      });
+      const changedCount = activeTransactionIds.length - skippedIds.length;
+      setActiveAttentionFocus(null);
+      setInclusionNotice(
+        `Reviewed ${changedCount} transaction${changedCount === 1 ? "" : "s"} in this statement.`,
+      );
+    } catch (caught) {
+      setInclusionError(caught instanceof Error ? caught.message : "Could not mark this statement reviewed.");
+    } finally {
+      setIsSavingBulkReview(false);
+    }
+  }
+
   async function handleMarkReviewed(transaction: StatementTransaction) {
     setInclusionError("");
     setInclusionNotice("");
@@ -3648,6 +3729,28 @@ function TransactionPanel({
             type="button"
           >
             {isCategorizing ? "Categorizing..." : categorizeButtonText}
+          </button>
+          <button
+            aria-label="Mark this bank statement transaction list reviewed"
+            className={[
+              "reviewed-list-button",
+              activeAttentionTargetsListReview
+                ? activeAttentionFocus?.softened
+                  ? "attention-field--soft"
+                  : "attention-field--active"
+                : "",
+            ].filter(Boolean).join(" ")}
+            data-attention-field="transaction_list_review"
+            disabled={
+              isActionBusy ||
+              isSavingBulkReview ||
+              activeTransactionIds.length === 0 ||
+              allTransactionsReviewed
+            }
+            onClick={() => void handleMarkListReviewed()}
+            type="button"
+          >
+            {isSavingBulkReview ? "Saving..." : "Reviewed"}
           </button>
           <button disabled={isActionBusy} onClick={openAddDialog} type="button">
             + Add Transaction
@@ -3959,7 +4062,6 @@ function TransactionPanel({
                 <th>Transaction Detail</th>
                 <th>Direction</th>
                 <th className="transaction-table__amount">Amount</th>
-                <th>Review</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -4082,18 +4184,6 @@ function TransactionPanel({
                     <td className={attentionCellClass("direction")}>{labelFor(directionLabels, String(transaction.direction))}</td>
                     <td className={attentionCellClass("amount", "transaction-table__amount")}>{formatMoney(transaction.amount)}</td>
                     <td>
-                      <span>
-                        {transactionReviewStatus(transaction) === "REVIEWED"
-                          ? "Reviewed"
-                          : needsPhase8Review
-                            ? "Needs Review"
-                            : labelFor(reviewStatusLabels, transactionReviewStatus(transaction))}
-                      </span>
-                      {!isIncluded ? <span className="transaction-badge">Excluded from summary</span> : null}
-                      {transaction.user_edited ? <span className="transaction-badge">Edited</span> : null}
-                      {transaction.user_added ? <span className="transaction-badge">User added</span> : null}
-                    </td>
-                    <td>
                       <div className="transaction-row-actions">
                         <button onClick={() => openNormalizationDialog(transaction)} type="button">
                           Edit Name
@@ -4111,16 +4201,12 @@ function TransactionPanel({
                         <button onClick={() => openEditDialog(transaction)} type="button">
                           Edit
                         </button>
-                        <button
-                          disabled={savingReviewIds.has(transaction.id) || transactionReviewStatus(transaction) === "REVIEWED"}
-                          onClick={() => void handleMarkReviewed(transaction)}
-                          type="button"
-                        >
-                          {savingReviewIds.has(transaction.id) ? "Saving..." : "Mark Reviewed"}
-                        </button>
                         <button className="danger-button" onClick={() => void onExclude(transaction.id)} type="button">
                           Exclude
                         </button>
+                        {!isIncluded ? <span className="transaction-badge">Excluded from summary</span> : null}
+                        {transaction.user_edited ? <span className="transaction-badge">Edited</span> : null}
+                        {transaction.user_added ? <span className="transaction-badge">User added</span> : null}
                       </div>
                     </td>
                   </tr>

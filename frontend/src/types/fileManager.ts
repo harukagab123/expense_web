@@ -287,6 +287,11 @@ export type TransactionInclusionBulkUpdateResponse = {
   skipped_transaction_ids: number[];
 };
 
+export type TransactionReviewBulkUpdateResponse = {
+  transactions: StatementTransaction[];
+  skipped_transaction_ids: number[];
+};
+
 export type TransactionPayload = {
   transaction_date?: string;
   transaction_detail?: string;
@@ -333,6 +338,11 @@ export type TransactionInclusionBulkPayload = {
 };
 
 export type TransactionReviewPayload = {
+  review_status: ReviewStatusValue;
+};
+
+export type TransactionReviewBulkPayload = {
+  transaction_ids: number[];
   review_status: ReviewStatusValue;
 };
 

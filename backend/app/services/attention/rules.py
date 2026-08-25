@@ -147,6 +147,27 @@ def statement_attention_items(statement: Statement) -> list[AttentionItem]:
     return _dedupe(items)
 
 
+def statement_transaction_review_attention_items(statement: Statement) -> list[AttentionItem]:
+    active_transactions = [transaction for transaction in statement.transactions if not transaction.excluded]
+    if not active_transactions:
+        return []
+    if all(transaction.review_status == REVIEW_REVIEWED for transaction in active_transactions):
+        return []
+
+    return [
+        _statement_item(
+            statement,
+            "BANK_STATEMENT_REVIEW_REQUIRED",
+            SEVERITY_REVIEW,
+            "Bank Statement Must Be Reviewed",
+            "Review this statement's transaction list.",
+            "transaction_list_review",
+            "transaction_review_status!=REVIEWED",
+            blocking=True,
+        )
+    ]
+
+
 def transaction_attention_items(transaction: Transaction) -> list[AttentionItem]:
     if transaction.excluded:
         return []

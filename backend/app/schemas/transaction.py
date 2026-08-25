@@ -233,6 +233,11 @@ class TransactionInclusionBulkUpdateResponse(BaseModel):
     skipped_transaction_ids: list[int]
 
 
+class TransactionReviewBulkUpdateResponse(BaseModel):
+    transactions: list[TransactionResponse]
+    skipped_transaction_ids: list[int]
+
+
 class MerchantNormalizationRuleResponse(BaseModel):
     id: int
     pattern: str
@@ -395,4 +400,9 @@ class TransactionInclusionBulkUpdate(BaseModel):
 
 
 class TransactionReviewUpdate(BaseModel):
+    review_status: ReviewStatusValue
+
+
+class TransactionReviewBulkUpdate(BaseModel):
+    transaction_ids: list[int] = Field(min_items=1)
     review_status: ReviewStatusValue
