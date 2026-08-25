@@ -343,3 +343,46 @@ export type CategoryCatalogResponse = {
     subcategories: Array<{ id: CategorySubcategoryValue | string; label: string }>;
   }>;
 };
+
+export type AttentionFolderPathItem = {
+  id: number;
+  name: string;
+};
+
+export type AttentionTargetSection = "statement" | "transaction";
+
+export type AttentionItem = {
+  attention_id: string;
+  attention_type: string;
+  severity: "ERROR" | "REVIEW" | "INFO" | string;
+  title: string;
+  description: string;
+  file_id: number | null;
+  file_name: string | null;
+  statement_id: number | null;
+  statement_label: string | null;
+  transaction_id: number | null;
+  transaction_date: string | null;
+  transaction_name: string | null;
+  transaction_amount: string | number | null;
+  target_section: AttentionTargetSection;
+  target_field: string | null;
+  blocking: boolean;
+  created_from_state: string;
+  folder_path: AttentionFolderPathItem[];
+};
+
+export type AttentionListResponse = {
+  total: number;
+  blocking_total: number;
+  review_total: number;
+  ready_for_summary: boolean;
+  items: AttentionItem[];
+};
+
+export type AttentionCountResponse = {
+  total: number;
+  blocking_total: number;
+  review_total: number;
+  ready_for_summary: boolean;
+};

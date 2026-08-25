@@ -16,6 +16,8 @@ import {
   extractTransactions,
   fileDownloadUrl,
   filePreviewUrl,
+  getAttention,
+  getAttentionCount,
   getFileManagerTree,
   getStatementForFile,
   getTransactionsForStatement,
@@ -33,6 +35,8 @@ import {
   uploadFiles,
 } from "./api/fileManager";
 import type {
+  AttentionItem,
+  AttentionListResponse,
   FileManagerTree,
   FolderNode,
   SearchResult,
@@ -74,6 +78,20 @@ type ConfirmDialogState =
   | { type: "folder"; id: number; name: string }
   | { type: "file"; id: number; name: string }
   | null;
+
+type AttentionFocusTarget = {
+  attentionId: string;
+  fileId: number;
+  statementId: number | null;
+  transactionId: number | null;
+  targetSection: "statement" | "transaction";
+  targetField: string | null;
+  requestedAt: number;
+};
+
+type ActiveAttentionFocus = AttentionFocusTarget & {
+  softened: boolean;
+};
 
 type StatementEditValues = {
   document_type: string;
@@ -160,6 +178,14 @@ const emptyTree: FileManagerTree = {
   name: "My Files",
   folders: [],
   files: [],
+};
+
+const emptyAttention: AttentionListResponse = {
+  total: 0,
+  blocking_total: 0,
+  review_total: 0,
+  ready_for_summary: true,
+  items: [],
 };
 
 const sortOptions: Array<{ value: SortBy; label: string }> = [
@@ -1059,10 +1085,14 @@ function searchResultKey(result: SearchResult): string {
 }
 
 function scrollTreeRowIntoView(result: SearchResult) {
+  scrollTreeKeyIntoView(searchResultKey(result));
+}
+
+function scrollTreeKeyIntoView(key: string) {
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
       document
-        .querySelector<HTMLElement>(`[data-tree-key="${searchResultKey(result)}"]`)
+        .querySelector<HTMLElement>(`[data-tree-key="${key}"]`)
         ?.scrollIntoView({ block: "nearest" });
     });
   });
@@ -1088,7 +1118,13 @@ export default function App() {
   const [nameDialog, setNameDialog] = useState<NameDialogState>(null);
   const [nameValue, setNameValue] = useState("");
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
+  const [attention, setAttention] = useState<AttentionListResponse>(emptyAttention);
+  const [isAttentionLoading, setIsAttentionLoading] = useState(false);
+  const [attentionError, setAttentionError] = useState("");
+  const [isAttentionOpen, setIsAttentionOpen] = useState(false);
+  const [attentionFocusTarget, setAttentionFocusTarget] = useState<AttentionFocusTarget | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const attentionRef = useRef<HTMLDivElement>(null);
   const searchRequestRef = useRef(0);
 
   const selectedFolder = selected.type === "folder" ? findFolder(tree.folders, selected.id) : undefined;
@@ -1137,9 +1173,60 @@ export default function App() {
     }
   }, [sortBy, sortDirection]);
 
+  const refreshAttention = useCallback(async () => {
+    setIsAttentionLoading(true);
+    setAttentionError("");
+    try {
+      if (isAttentionOpen) {
+        const nextAttention = await getAttention();
+        setAttention(nextAttention);
+      } else {
+        const nextCount = await getAttentionCount();
+        setAttention((current) => ({
+          ...current,
+          ...nextCount,
+          items: nextCount.total === 0 ? [] : current.items,
+        }));
+      }
+    } catch (caught) {
+      setAttentionError(caught instanceof Error ? caught.message : "Attention items could not be loaded.");
+    } finally {
+      setIsAttentionLoading(false);
+    }
+  }, [isAttentionOpen]);
+
   useEffect(() => {
     void loadTree();
   }, [loadTree]);
+
+  useEffect(() => {
+    void refreshAttention();
+  }, [refreshAttention]);
+
+  useEffect(() => {
+    if (!isAttentionOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      if (attentionRef.current && !attentionRef.current.contains(event.target as Node)) {
+        setIsAttentionOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsAttentionOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isAttentionOpen]);
 
   useEffect(() => {
     const query = search.trim();
@@ -1200,14 +1287,17 @@ export default function App() {
   }
 
   function selectFolder(folderId: number) {
+    setAttentionFocusTarget(null);
     setSelected({ type: "folder", id: folderId });
   }
 
   function selectFile(fileId: number) {
+    setAttentionFocusTarget(null);
     setSelected({ type: "file", id: fileId });
   }
 
   function selectRoot() {
+    setAttentionFocusTarget(null);
     setSelected({ type: "root" });
   }
 
@@ -1226,6 +1316,40 @@ export default function App() {
     clearSearch();
     setNotice(`Selected ${result.type} "${result.name}".`);
     scrollTreeRowIntoView(result);
+  }
+
+  function handleSelectAttentionItem(item: AttentionItem) {
+    if (item.file_id === null) {
+      setIsAttentionOpen(false);
+      setNotice("This item no longer exists.");
+      void refreshAttention();
+      return;
+    }
+
+    const file = findFile(tree.folders, tree.files, item.file_id);
+    if (!file) {
+      setIsAttentionOpen(false);
+      setNotice("This item no longer exists.");
+      void loadTree();
+      void refreshAttention();
+      return;
+    }
+
+    setExpandedFolders((current) => new Set([...current, ...item.folder_path.map((folder) => folder.id)]));
+    setSelected({ type: "file", id: item.file_id });
+    clearSearch();
+    setIsAttentionOpen(false);
+    setAttentionFocusTarget({
+      attentionId: item.attention_id,
+      fileId: item.file_id,
+      statementId: item.statement_id,
+      transactionId: item.transaction_id,
+      targetSection: item.target_section,
+      targetField: item.target_field,
+      requestedAt: Date.now(),
+    });
+    setNotice(`Opened ${file.display_name} for ${item.title.toLowerCase()}.`);
+    scrollTreeKeyIntoView(`file-${item.file_id}`);
   }
 
   function openNameDialog(dialog: Exclude<NameDialogState, null>) {
@@ -1268,6 +1392,7 @@ export default function App() {
 
       setNameDialog(null);
       await loadTree();
+      await refreshAttention();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Name change failed.");
     }
@@ -1330,6 +1455,7 @@ export default function App() {
       setSelected({ type: "root" });
       setConfirmDialog(null);
       await loadTree();
+      await refreshAttention();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Item could not be deleted.");
     }
@@ -1363,6 +1489,7 @@ export default function App() {
       setMoveDialog(null);
       setNotice("Move complete.");
       await loadTree();
+      await refreshAttention();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Item could not be moved.");
     }
@@ -1385,6 +1512,7 @@ export default function App() {
       const failed = result.failed.length > 0 ? ` ${result.failed.length} failed.` : "";
       setNotice(`${result.uploaded.length} uploaded.${failed}`);
       await loadTree();
+      await refreshAttention();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Upload failed.");
     } finally {
@@ -1456,6 +1584,17 @@ export default function App() {
         <div className="top-bar__inner">
           <h1>Personal Financial File Manager</h1>
           <div className="top-actions">
+            <div className="attention-menu" ref={attentionRef}>
+              <NotificationBell
+                attention={attention}
+                error={attentionError}
+                isLoading={isAttentionLoading}
+                isOpen={isAttentionOpen}
+                onRefresh={() => void refreshAttention()}
+                onSelect={handleSelectAttentionItem}
+                onToggle={() => setIsAttentionOpen((current) => !current)}
+              />
+            </div>
             <button onClick={handleCreateFolder} type="button">
               New Folder
             </button>
@@ -1668,7 +1807,13 @@ export default function App() {
           <p className={`notice ${error ? "notice--error" : ""}`}>{error || notice}</p>
 
           {selectedFile ? (
-            <FileDetails file={selectedFile} locationPath={selectedLocationPath} />
+            <FileDetails
+              attentionTarget={attentionFocusTarget?.fileId === selectedFile.id ? attentionFocusTarget : null}
+              file={selectedFile}
+              locationPath={selectedLocationPath}
+              onAttentionRefresh={refreshAttention}
+              onAttentionTargetConsumed={() => setAttentionFocusTarget(null)}
+            />
           ) : (
             <FolderDetails
               createdAt={selectedFolder?.created_at}
@@ -1756,6 +1901,121 @@ export default function App() {
   );
 }
 
+function NotificationBell({
+  attention,
+  error,
+  isLoading,
+  isOpen,
+  onRefresh,
+  onSelect,
+  onToggle,
+}: {
+  attention: AttentionListResponse;
+  error: string;
+  isLoading: boolean;
+  isOpen: boolean;
+  onRefresh: () => void;
+  onSelect: (item: AttentionItem) => void;
+  onToggle: () => void;
+}) {
+  const accessibleLabel =
+    attention.total > 0
+      ? `Notifications, ${attention.total} items need attention`
+      : "Notifications, no items need attention";
+  const transactionItems = attention.items.filter((item) => item.target_section === "transaction");
+  const statementItems = attention.items.filter((item) => item.target_section === "statement");
+
+  return (
+    <>
+      <button
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        aria-label={accessibleLabel}
+        className={`notification-button ${attention.total > 0 ? "notification-button--active" : ""}`}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onToggle();
+          }
+        }}
+        onClick={onToggle}
+        type="button"
+      >
+        <span aria-hidden="true" className="notification-button__icon">
+          🔔
+        </span>
+        {attention.total > 0 ? <span className="notification-badge">{attention.total}</span> : null}
+      </button>
+      {isOpen ? (
+        <div aria-label="Needs attention" className="attention-panel" role="dialog">
+          <div className="attention-panel__header">
+            <div>
+              <h2>Needs Attention</h2>
+              <p>
+                {attention.total > 0
+                  ? `${attention.blocking_total} blocking, ${attention.review_total} review`
+                  : "All selected transactions are ready for summary."}
+              </p>
+            </div>
+            <button disabled={isLoading} onClick={onRefresh} type="button">
+              Refresh
+            </button>
+          </div>
+          {isLoading ? <div className="attention-panel__state">Loading attention items...</div> : null}
+          {error ? <div className="attention-panel__state attention-panel__state--error">{error}</div> : null}
+          {!isLoading && !error && attention.total === 0 ? (
+            <div className="attention-panel__state">All selected transactions are ready for summary.</div>
+          ) : null}
+          <AttentionGroup title="Transactions" items={transactionItems} onSelect={onSelect} />
+          <AttentionGroup title="Statements" items={statementItems} onSelect={onSelect} />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function AttentionGroup({
+  items,
+  onSelect,
+  title,
+}: {
+  items: AttentionItem[];
+  onSelect: (item: AttentionItem) => void;
+  title: string;
+}) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="attention-group" aria-label={title}>
+      <h3>
+        {title} <span>{items.length}</span>
+      </h3>
+      <div className="attention-list">
+        {items.map((item) => (
+          <button className="attention-item" key={item.attention_id} onClick={() => onSelect(item)} type="button">
+            <span className={`attention-item__severity attention-item__severity--${item.severity.toLowerCase()}`}>
+              {item.blocking ? "!" : "?"}
+            </span>
+            <span className="attention-item__body">
+              <span className="attention-item__title">{item.title}</span>
+              <span className="attention-item__context">
+                {item.transaction_id !== null
+                  ? `${item.transaction_name ?? "Transaction"} - ${formatDateOnly(item.transaction_date)} - ${formatMoney(item.transaction_amount)}`
+                  : item.description}
+              </span>
+              <span className="attention-item__source">
+                {item.statement_label ?? item.file_name ?? "Selected file"}
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function FolderDetails({
   createdAt,
   fileCount,
@@ -1805,7 +2065,19 @@ type PreviewState =
   | { status: "error"; objectUrl?: undefined; message: string }
   | { status: "unsupported"; objectUrl?: undefined; message?: undefined };
 
-function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: string }) {
+function FileDetails({
+  attentionTarget,
+  file,
+  locationPath,
+  onAttentionRefresh,
+  onAttentionTargetConsumed,
+}: {
+  attentionTarget: AttentionFocusTarget | null;
+  file: StoredFile;
+  locationPath: string;
+  onAttentionRefresh: () => Promise<void>;
+  onAttentionTargetConsumed: () => void;
+}) {
   const isPdf = fileCanPreview(file) === "pdf";
   const [statement, setStatement] = useState<StatementDetection | null>(null);
   const [isStatementLoading, setIsStatementLoading] = useState(false);
@@ -1814,6 +2086,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
   const [latestExtraction, setLatestExtraction] = useState<TransactionExtraction | null>(null);
   const [transactions, setTransactions] = useState<StatementTransaction[]>([]);
   const [isTransactionsLoading, setIsTransactionsLoading] = useState(false);
+  const [hasLoadedTransactions, setHasLoadedTransactions] = useState(false);
   const [isExtractingTransactions, setIsExtractingTransactions] = useState(false);
   const [isNormalizingTransactions, setIsNormalizingTransactions] = useState(false);
   const [isClassifyingTransactionTypes, setIsClassifyingTransactionTypes] = useState(false);
@@ -1855,6 +2128,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     const response = await getTransactionsForStatement(statementId);
     setLatestExtraction(response.latest_extraction);
     setTransactions(response.transactions);
+    setHasLoadedTransactions(true);
   }, []);
 
   useEffect(() => {
@@ -1862,6 +2136,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setLatestExtraction(null);
     setTransactions([]);
     setTransactionError("");
+    setHasLoadedTransactions(false);
 
     if (!statement) {
       setIsTransactionsLoading(false);
@@ -1874,6 +2149,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
         if (!controller.signal.aborted) {
           setLatestExtraction(response.latest_extraction);
           setTransactions(response.transactions);
+          setHasLoadedTransactions(true);
         }
       })
       .catch((caught) => {
@@ -1884,6 +2160,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
       .finally(() => {
         if (!controller.signal.aborted) {
           setIsTransactionsLoading(false);
+          setHasLoadedTransactions(true);
         }
       });
 
@@ -1896,6 +2173,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     try {
       const nextStatement = await detectStatement(file.id);
       setStatement(nextStatement);
+      await onAttentionRefresh();
     } catch (caught) {
       setStatementError(caught instanceof Error ? caught.message : "Unable to analyze this file.");
     } finally {
@@ -1907,6 +2185,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setStatementError("");
     const nextStatement = await updateStatementForFile(file.id, payload);
     setStatement(nextStatement);
+    await onAttentionRefresh();
   }
 
   async function handleExtractTransactions() {
@@ -1919,6 +2198,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
       const response = await extractTransactions(statement.id);
       setLatestExtraction(response.extraction);
       setTransactions(response.transactions);
+      await onAttentionRefresh();
     } catch (caught) {
       setTransactionError(caught instanceof Error ? caught.message : "Unable to extract transactions.");
     } finally {
@@ -1935,6 +2215,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     try {
       const response = await normalizeTransactions(statement.id);
       setTransactions(response.transactions);
+      await onAttentionRefresh();
     } catch (caught) {
       setTransactionError(caught instanceof Error ? caught.message : "Unable to normalize transactions.");
     } finally {
@@ -1951,6 +2232,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     try {
       const response = await classifyTransactionTypes(statement.id);
       setTransactions(response.transactions);
+      await onAttentionRefresh();
     } catch (caught) {
       setTransactionError(caught instanceof Error ? caught.message : "Unable to classify transaction types.");
     } finally {
@@ -1967,6 +2249,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     try {
       const response = await categorizeTransactions(statement.id);
       setTransactions(response.transactions);
+      await onAttentionRefresh();
     } catch (caught) {
       setTransactionError(caught instanceof Error ? caught.message : "Unable to categorize transactions.");
     } finally {
@@ -1981,6 +2264,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setTransactionError("");
     await createTransactionForStatement(statement.id, payload);
     await refreshTransactions(statement.id);
+    await onAttentionRefresh();
   }
 
   async function handleUpdateTransaction(transactionId: number, payload: TransactionPayload) {
@@ -1990,6 +2274,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setTransactionError("");
     await updateTransaction(transactionId, payload);
     await refreshTransactions(statement.id);
+    await onAttentionRefresh();
   }
 
   async function handleUpdateTransactionNormalization(
@@ -2002,6 +2287,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setTransactionError("");
     await updateTransactionNormalization(transactionId, payload);
     await refreshTransactions(statement.id);
+    await onAttentionRefresh();
   }
 
   async function handleUpdateTransactionType(transactionId: number, payload: TransactionTypePayload) {
@@ -2011,6 +2297,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setTransactionError("");
     await updateTransactionType(transactionId, payload);
     await refreshTransactions(statement.id);
+    await onAttentionRefresh();
   }
 
   async function handleUpdateTransactionCategory(transactionId: number, payload: TransactionCategoryPayload) {
@@ -2020,6 +2307,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setTransactionError("");
     await updateTransactionCategory(transactionId, payload);
     await refreshTransactions(statement.id);
+    await onAttentionRefresh();
   }
 
   async function handleUpdateTransactionInclusion(
@@ -2029,6 +2317,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setTransactionError("");
     const transaction = await updateTransactionInclusion(transactionId, payload);
     setTransactions((current) => replaceTransactionInList(current, transaction));
+    await onAttentionRefresh();
     return transaction;
   }
 
@@ -2039,6 +2328,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setTransactionError("");
     const transaction = await updateTransactionReview(transactionId, payload);
     setTransactions((current) => replaceTransactionInList(current, transaction));
+    await onAttentionRefresh();
     return transaction;
   }
 
@@ -2049,6 +2339,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setTransactionError("");
     const response = await bulkUpdateTransactionTypes(payload);
     await refreshTransactions(statement.id);
+    await onAttentionRefresh();
     return response.skipped_transaction_ids;
   }
 
@@ -2059,6 +2350,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setTransactionError("");
     const response = await bulkUpdateTransactionCategories(payload);
     await refreshTransactions(statement.id);
+    await onAttentionRefresh();
     return response.skipped_transaction_ids;
   }
 
@@ -2066,6 +2358,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     setTransactionError("");
     const response = await bulkUpdateTransactionInclusion(payload);
     setTransactions((current) => mergeUpdatedTransactions(current, response.transactions));
+    await onAttentionRefresh();
     return response.skipped_transaction_ids;
   }
 
@@ -2077,6 +2370,7 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
     try {
       await excludeTransaction(transactionId);
       await refreshTransactions(statement.id);
+      await onAttentionRefresh();
     } catch (caught) {
       setTransactionError(caught instanceof Error ? caught.message : "Unable to exclude this transaction.");
     }
@@ -2121,11 +2415,13 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
       <PreviewPane file={file} />
       {isPdf || statement ? (
         <StatementPanel
+          attentionTarget={attentionTarget?.targetSection === "statement" ? attentionTarget : null}
           error={statementError}
           isAnalyzing={isAnalyzing}
           isLoading={isStatementLoading}
           onAnalyze={handleAnalyzeStatement}
           onSave={handleSaveStatement}
+          onAttentionTargetConsumed={onAttentionTargetConsumed}
           statement={statement}
         />
       ) : null}
@@ -2154,6 +2450,11 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
           onBulkEditInclusion={handleBulkUpdateTransactionInclusion}
           onNormalize={handleNormalizeTransactions}
           onTransactionsUpdate={(updater) => setTransactions((current) => updater(current))}
+          attentionTarget={
+            attentionTarget?.targetSection === "transaction" && hasLoadedTransactions ? attentionTarget : null
+          }
+          onAttentionRefresh={onAttentionRefresh}
+          onAttentionTargetConsumed={onAttentionTargetConsumed}
           transactions={transactions}
         />
       ) : null}
@@ -2162,17 +2463,21 @@ function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: s
 }
 
 function StatementPanel({
+  attentionTarget,
   error,
   isAnalyzing,
   isLoading,
   onAnalyze,
+  onAttentionTargetConsumed,
   onSave,
   statement,
 }: {
+  attentionTarget: AttentionFocusTarget | null;
   error: string;
   isAnalyzing: boolean;
   isLoading: boolean;
   onAnalyze: () => void;
+  onAttentionTargetConsumed: () => void;
   onSave: (payload: StatementUpdate) => Promise<void>;
   statement: StatementDetection | null;
 }) {
@@ -2180,6 +2485,8 @@ function StatementPanel({
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [editError, setEditError] = useState("");
+  const [activeAttentionField, setActiveAttentionField] = useState<string | null>(null);
+  const handledAttentionRef = useRef("");
   const buttonText = statement ? "Re-analyze" : "Analyze File";
   const statusText = statement ? labelFor(detectionStatusLabels, statement.detection_status) : "Not Analyzed";
   const subtitle = statement?.metadata_source === "USER_EDITED" ? `${statusText} - User edited` : statusText;
@@ -2190,12 +2497,41 @@ function StatementPanel({
       setIsEditing(false);
       setEditValues(null);
       setEditError("");
+      setActiveAttentionField(null);
       return;
     }
     if (!isEditing) {
       setEditValues(statementToEditValues(statement));
     }
   }, [statement, isEditing]);
+
+  useEffect(() => {
+    if (!attentionTarget || !statement || attentionTarget.statementId !== statement.id) {
+      return;
+    }
+    const attentionKey = `${attentionTarget.attentionId}:${attentionTarget.requestedAt}`;
+    if (handledAttentionRef.current === attentionKey) {
+      return;
+    }
+
+    handledAttentionRef.current = attentionKey;
+    setEditValues(statementToEditValues(statement));
+    setEditError("");
+    setIsEditing(true);
+    setActiveAttentionField(attentionTarget.targetField);
+    onAttentionTargetConsumed();
+  }, [attentionTarget, onAttentionTargetConsumed, statement]);
+
+  useEffect(() => {
+    if (!isEditing || !activeAttentionField) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`.statement-edit-form [data-attention-field="${activeAttentionField}"]`)
+        ?.focus({ preventScroll: true });
+    });
+  }, [activeAttentionField, isEditing]);
 
   function updateEditValue(field: keyof StatementEditValues, value: string) {
     setEditValues((current) => (current ? { ...current, [field]: value } : current));
@@ -2207,13 +2543,19 @@ function StatementPanel({
     }
     setEditValues(statementToEditValues(statement));
     setEditError("");
+    setActiveAttentionField(null);
     setIsEditing(true);
   }
 
   function cancelEditing() {
     setEditValues(statement ? statementToEditValues(statement) : null);
     setEditError("");
+    setActiveAttentionField(null);
     setIsEditing(false);
+  }
+
+  function statementFieldClass(field: string): string {
+    return activeAttentionField === field ? "attention-field attention-field--active" : "";
   }
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
@@ -2232,6 +2574,7 @@ function StatementPanel({
     setEditError("");
     try {
       await onSave(statementPayloadFromValues(editValues));
+      setActiveAttentionField(null);
       setIsEditing(false);
     } catch (caught) {
       setEditError(caught instanceof Error ? caught.message : "Statement details could not be saved.");
@@ -2305,9 +2648,10 @@ function StatementPanel({
 
       {statement && isEditing && editValues ? (
         <form className="statement-edit-form" onSubmit={(event) => void handleSave(event)}>
-          <label>
+          <label className={statementFieldClass("document_type")}>
             <span>Document Type</span>
             <select
+              data-attention-field="document_type"
               value={editValues.document_type}
               onChange={(event) => updateEditValue("document_type", event.target.value)}
             >
@@ -2318,9 +2662,10 @@ function StatementPanel({
               ))}
             </select>
           </label>
-          <label>
+          <label className={statementFieldClass("institution")}>
             <span>Institution</span>
             <select
+              data-attention-field="institution"
               value={editValues.institution}
               onChange={(event) => updateEditValue("institution", event.target.value)}
             >
@@ -2331,18 +2676,20 @@ function StatementPanel({
               ))}
             </select>
           </label>
-          <label>
+          <label className={statementFieldClass("product_name")}>
             <span>Product Name</span>
             <input
+              data-attention-field="product_name"
               maxLength={255}
               type="text"
               value={editValues.product_name}
               onChange={(event) => updateEditValue("product_name", event.target.value)}
             />
           </label>
-          <label>
+          <label className={statementFieldClass("account_type")}>
             <span>Account Type</span>
             <select
+              data-attention-field="account_type"
               value={editValues.account_type}
               onChange={(event) => updateEditValue("account_type", event.target.value)}
             >
@@ -2353,9 +2700,10 @@ function StatementPanel({
               ))}
             </select>
           </label>
-          <label>
+          <label className={statementFieldClass("account_last_four")}>
             <span>Account Last Four</span>
             <input
+              data-attention-field="account_last_four"
               inputMode="numeric"
               maxLength={4}
               pattern="[0-9]{0,4}"
@@ -2364,17 +2712,19 @@ function StatementPanel({
               onChange={(event) => updateEditValue("account_last_four", event.target.value)}
             />
           </label>
-          <label>
+          <label className={statementFieldClass("statement_start_date")}>
             <span>Statement Start</span>
             <input
+              data-attention-field="statement_start_date"
               type="date"
               value={editValues.statement_start_date}
               onChange={(event) => updateEditValue("statement_start_date", event.target.value)}
             />
           </label>
-          <label>
+          <label className={statementFieldClass("statement_end_date")}>
             <span>Statement End</span>
             <input
+              data-attention-field="statement_end_date"
               type="date"
               value={editValues.statement_end_date}
               onChange={(event) => updateEditValue("statement_end_date", event.target.value)}
@@ -2458,6 +2808,7 @@ function StatementPanel({
 }
 
 function TransactionPanel({
+  attentionTarget,
   error,
   isCategorizing,
   isClassifyingTypes,
@@ -2481,8 +2832,11 @@ function TransactionPanel({
   onExtract,
   onNormalize,
   onTransactionsUpdate,
+  onAttentionRefresh,
+  onAttentionTargetConsumed,
   transactions,
 }: {
+  attentionTarget: AttentionFocusTarget | null;
   error: string;
   isCategorizing: boolean;
   isClassifyingTypes: boolean;
@@ -2506,6 +2860,8 @@ function TransactionPanel({
   onExtract: () => void;
   onNormalize: () => void;
   onTransactionsUpdate: (updater: (current: StatementTransaction[]) => StatementTransaction[]) => void;
+  onAttentionRefresh: () => Promise<void>;
+  onAttentionTargetConsumed: () => void;
   transactions: StatementTransaction[];
 }) {
   const [sortBy, setSortBy] = useState<TransactionSortBy>("source_order");
@@ -2562,9 +2918,11 @@ function TransactionPanel({
   const [savingInclusionIds, setSavingInclusionIds] = useState<Set<number>>(new Set());
   const [savingReviewIds, setSavingReviewIds] = useState<Set<number>>(new Set());
   const [transactionSearch, setTransactionSearch] = useState("");
+  const [activeAttentionFocus, setActiveAttentionFocus] = useState<ActiveAttentionFocus | null>(null);
   const bulkHeaderCheckboxRef = useRef<HTMLInputElement>(null);
   const inclusionHeaderCheckboxRef = useRef<HTMLInputElement>(null);
   const inclusionRequestVersions = useRef<Map<number, number>>(new Map());
+  const handledAttentionRef = useRef("");
   const reviewCount = transactions.filter((transaction) => transaction.needs_review).length;
   const normalizationReviewCount = transactions.filter(
     (transaction) => transactionNormalizationStatus(transaction) === "NEEDS_REVIEW",
@@ -2672,13 +3030,117 @@ function TransactionPanel({
     });
   }, [transactions]);
 
+  useEffect(() => {
+    if (!attentionTarget || attentionTarget.transactionId === null) {
+      return;
+    }
+    const attentionKey = `${attentionTarget.attentionId}:${attentionTarget.requestedAt}`;
+    if (handledAttentionRef.current === attentionKey || isLoading) {
+      return;
+    }
+
+    const targetTransaction = transactions.find((transaction) => transaction.id === attentionTarget.transactionId);
+    if (!targetTransaction) {
+      handledAttentionRef.current = attentionKey;
+      setInclusionError("This item no longer exists.");
+      void onAttentionRefresh();
+      onAttentionTargetConsumed();
+      return;
+    }
+
+    const targetField = attentionTarget.targetField ?? "transaction_detail";
+    handledAttentionRef.current = attentionKey;
+    onAttentionTargetConsumed();
+    setTransactionSearch("");
+    setNormalizationFilter("all");
+    setTypeFilter("all");
+    setCategoryFilter("all");
+    setInclusionFilter("all");
+    setActiveAttentionFocus({ ...attentionTarget, targetField, softened: false });
+
+    if (targetField === "normalized_name") {
+      setNormalizationDialogState({ transaction: targetTransaction });
+      setNormalizationFormValues(normalizationToFormValues(targetTransaction));
+      setNormalizationFormError("");
+      return;
+    }
+    if (targetField === "transaction_type") {
+      setTypeDialogState({ transaction: targetTransaction });
+      setTypeFormValues(typeToFormValues(targetTransaction));
+      setTypeFormError("");
+      return;
+    }
+    if (targetField === "main_category" || targetField === "subcategory") {
+      setCategoryDialogState({ transaction: targetTransaction });
+      setCategoryFormValues(categoryToFormValues(targetTransaction));
+      setCategoryFormError("");
+      return;
+    }
+
+    setDialogState({ mode: "edit", transaction: targetTransaction });
+    setFormValues(transactionToFormValues(targetTransaction));
+    setFormError("");
+  }, [attentionTarget, isLoading, onAttentionRefresh, onAttentionTargetConsumed, transactions]);
+
+  const activeAttentionTransactionId = activeAttentionFocus?.transactionId ?? null;
+  const activeAttentionRequestedAt = activeAttentionFocus?.requestedAt ?? null;
+  const activeAttentionTargetField = activeAttentionFocus?.targetField ?? null;
+
+  useEffect(() => {
+    if (activeAttentionTransactionId === null || activeAttentionRequestedAt === null) {
+      return;
+    }
+
+    const targetField = activeAttentionTargetField ?? "transaction_detail";
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const row = document.querySelector<HTMLElement>(`[data-transaction-id="${activeAttentionTransactionId}"]`);
+        const scrollContainer = row?.closest<HTMLElement>(".details-pane");
+        if (row && scrollContainer && scrollContainer.scrollHeight > scrollContainer.clientHeight + 1) {
+          const rowRect = row.getBoundingClientRect();
+          const containerRect = scrollContainer.getBoundingClientRect();
+          const offset = rowRect.top - containerRect.top - containerRect.height * 0.32;
+          scrollContainer.scrollTo({
+            top: scrollContainer.scrollTop + offset,
+            behavior: prefersReducedMotion ? "auto" : "smooth",
+          });
+        } else if (row) {
+          const rowRect = row.getBoundingClientRect();
+          window.scrollTo({
+            top: window.scrollY + rowRect.top - window.innerHeight * 0.35,
+            behavior: prefersReducedMotion ? "auto" : "smooth",
+          });
+        }
+        document
+          .querySelector<HTMLElement>(`.transaction-dialog [data-attention-field="${targetField}"]`)
+          ?.focus({ preventScroll: true });
+      });
+    });
+
+    const timeoutId = window.setTimeout(() => {
+      setActiveAttentionFocus((current) =>
+        current?.requestedAt === activeAttentionRequestedAt ? { ...current, softened: true } : current,
+      );
+    }, 4200);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    activeAttentionRequestedAt,
+    activeAttentionTargetField,
+    activeAttentionTransactionId,
+    sortedTransactions,
+  ]);
+
   function openAddDialog() {
+    setActiveAttentionFocus(null);
     setDialogState({ mode: "add" });
     setFormValues(emptyTransactionFormValues());
     setFormError("");
   }
 
   function openEditDialog(transaction: StatementTransaction) {
+    setActiveAttentionFocus(null);
     setDialogState({ mode: "edit", transaction });
     setFormValues(transactionToFormValues(transaction));
     setFormError("");
@@ -2688,9 +3150,11 @@ function TransactionPanel({
     setDialogState(null);
     setFormValues(emptyTransactionFormValues());
     setFormError("");
+    setActiveAttentionFocus(null);
   }
 
   function openNormalizationDialog(transaction: StatementTransaction) {
+    setActiveAttentionFocus(null);
     setNormalizationDialogState({ transaction });
     setNormalizationFormValues(normalizationToFormValues(transaction));
     setNormalizationFormError("");
@@ -2700,9 +3164,11 @@ function TransactionPanel({
     setNormalizationDialogState(null);
     setNormalizationFormValues({ normalized_name: "", use_for_future: false });
     setNormalizationFormError("");
+    setActiveAttentionFocus(null);
   }
 
   function openTypeDialog(transaction: StatementTransaction) {
+    setActiveAttentionFocus(null);
     setTypeDialogState({ transaction });
     setTypeFormValues(typeToFormValues(transaction));
     setTypeFormError("");
@@ -2712,9 +3178,11 @@ function TransactionPanel({
     setTypeDialogState(null);
     setTypeFormValues({ transaction_type: "UNKNOWN", use_for_future: false });
     setTypeFormError("");
+    setActiveAttentionFocus(null);
   }
 
   function openCategoryDialog(transaction: StatementTransaction) {
+    setActiveAttentionFocus(null);
     setCategoryDialogState({ transaction });
     setCategoryFormValues(categoryToFormValues(transaction));
     setCategoryFormError("");
@@ -2728,6 +3196,7 @@ function TransactionPanel({
       use_for_future: false,
     });
     setCategoryFormError("");
+    setActiveAttentionFocus(null);
   }
 
   function updateFormValue(field: keyof TransactionFormValues, value: string) {
@@ -2928,6 +3397,34 @@ function TransactionPanel({
     }
   }
 
+  function clearAttentionFocusOnInteraction() {
+    if (activeAttentionFocus?.softened) {
+      setActiveAttentionFocus(null);
+    }
+  }
+
+  function attentionRowClass(transactionId: number): string {
+    if (activeAttentionFocus?.transactionId !== transactionId) {
+      return "";
+    }
+    return activeAttentionFocus.softened ? "transaction-row--attention-soft" : "transaction-row--attention";
+  }
+
+  function attentionFieldClass(field: string): string {
+    return activeAttentionFocus?.targetField === field
+      ? activeAttentionFocus.softened
+        ? "attention-field attention-field--soft"
+        : "attention-field attention-field--active"
+      : "";
+  }
+
+  function attentionCellClass(field: string, extraClass = ""): string {
+    return [
+      extraClass,
+      activeAttentionFocus?.targetField === field ? "transaction-cell--attention" : "",
+    ].filter(Boolean).join(" ");
+  }
+
   function toggleVisibleTransactions(checked: boolean) {
     setSelectedTransactionIds((current) => {
       const next = new Set(current);
@@ -3109,7 +3606,12 @@ function TransactionPanel({
   }
 
   return (
-    <section className="transactions-panel" aria-label="Extracted transactions">
+    <section
+      className="transactions-panel"
+      aria-label="Extracted transactions"
+      onKeyDownCapture={clearAttentionFocusOnInteraction}
+      onPointerDownCapture={clearAttentionFocusOnInteraction}
+    >
       <div className="transactions-panel__header">
         <div>
           <h3>Transactions</h3>
@@ -3479,9 +3981,11 @@ function TransactionPanel({
                 return (
                   <tr
                     key={transaction.id}
+                    data-transaction-id={transaction.id}
                     className={[
                       isIncluded ? "transaction-row--included" : "transaction-row--excluded",
                       needsPhase8Review ? "transaction-row--review" : "",
+                      attentionRowClass(transaction.id),
                     ].filter(Boolean).join(" ")}
                   >
                     <td className="transaction-include-cell">
@@ -3506,8 +4010,8 @@ function TransactionPanel({
                         type="checkbox"
                       />
                     </td>
-                    <td>{formatDateOnly(transaction.transaction_date)}</td>
-                    <td>
+                    <td className={attentionCellClass("transaction_date")}>{formatDateOnly(transaction.transaction_date)}</td>
+                    <td className={attentionCellClass("normalized_name")}>
                       <span className={transaction.normalized_name ? "transaction-name-text" : "transaction-name-empty"}>
                         {transaction.normalized_name ?? "Unresolved"}
                       </span>
@@ -3525,7 +4029,7 @@ function TransactionPanel({
                         <span className="transaction-badge">Name review</span>
                       ) : null}
                     </td>
-                    <td>
+                    <td className={attentionCellClass("transaction_type")}>
                       <span
                         className={
                           transactionTypeValue(transaction) === "UNKNOWN"
@@ -3546,7 +4050,7 @@ function TransactionPanel({
                       {typeSource === "LEARNED_RULE" ? <span className="transaction-badge">Rule</span> : null}
                       {needsTypeReview ? <span className="transaction-badge">Type review</span> : null}
                     </td>
-                    <td>
+                    <td className={attentionCellClass("main_category")}>
                       <span className={currentMainCategory ? "transaction-category-text" : "transaction-category-empty"}>
                         {currentMainCategory
                           ? labelFor(categoryLabels, currentMainCategory)
@@ -3564,19 +4068,19 @@ function TransactionPanel({
                       {currentCategorySource === "LEARNED_RULE" ? <span className="transaction-badge">Rule</span> : null}
                       {needsCategoryReview ? <span className="transaction-badge">Category review</span> : null}
                     </td>
-                    <td>
+                    <td className={attentionCellClass("subcategory")}>
                       <span className={currentSubcategory ? "transaction-category-text" : "transaction-category-empty"}>
                         {currentSubcategory ? labelFor(subcategoryLabels, currentSubcategory) : "-"}
                       </span>
                     </td>
-                    <td>
+                    <td className={attentionCellClass("transaction_detail")}>
                       <span className="transaction-detail-text">{transaction.transaction_detail}</span>
                       {transaction.source_page ? (
                         <span className="transaction-source">Page {transaction.source_page}</span>
                       ) : null}
                     </td>
-                    <td>{labelFor(directionLabels, String(transaction.direction))}</td>
-                    <td className="transaction-table__amount">{formatMoney(transaction.amount)}</td>
+                    <td className={attentionCellClass("direction")}>{labelFor(directionLabels, String(transaction.direction))}</td>
+                    <td className={attentionCellClass("amount", "transaction-table__amount")}>{formatMoney(transaction.amount)}</td>
                     <td>
                       <span>
                         {transactionReviewStatus(transaction) === "REVIEWED"
@@ -3634,35 +4138,39 @@ function TransactionPanel({
               <h3>{dialogState.mode === "edit" ? "Edit Transaction" : "Add Transaction"}</h3>
             </div>
             {formError ? <div className="transaction-state transaction-state--error">{formError}</div> : null}
-            <label>
+            <label className={attentionFieldClass("transaction_date")}>
               <span>Date</span>
               <input
+                data-attention-field="transaction_date"
                 placeholder="YYYY-MM-DD"
                 type="text"
                 value={formValues.transaction_date}
                 onChange={(event) => updateFormValue("transaction_date", event.target.value)}
               />
             </label>
-            <label>
+            <label className={attentionFieldClass("transaction_detail")}>
               <span>Transaction Detail</span>
               <input
+                data-attention-field="transaction_detail"
                 type="text"
                 value={formValues.transaction_detail}
                 onChange={(event) => updateFormValue("transaction_detail", event.target.value)}
               />
             </label>
-            <label>
+            <label className={attentionFieldClass("amount")}>
               <span>Amount</span>
               <input
+                data-attention-field="amount"
                 inputMode="decimal"
                 type="text"
                 value={formValues.amount}
                 onChange={(event) => updateFormValue("amount", event.target.value)}
               />
             </label>
-            <label>
+            <label className={attentionFieldClass("direction")}>
               <span>Direction</span>
               <select
+                data-attention-field="direction"
                 value={formValues.direction}
                 onChange={(event) => updateFormValue("direction", event.target.value as TransactionDirection)}
               >
@@ -3698,10 +4206,11 @@ function TransactionPanel({
               <span>Raw Transaction Detail</span>
               <input readOnly type="text" value={normalizationDialogState.transaction.transaction_detail} />
             </label>
-            <label>
+            <label className={attentionFieldClass("normalized_name")}>
               <span>Name</span>
               <input
                 autoFocus
+                data-attention-field="normalized_name"
                 maxLength={255}
                 type="text"
                 value={normalizationFormValues.normalized_name}
@@ -3722,6 +4231,16 @@ function TransactionPanel({
               </div>
             ) : null}
             <div className="modal-actions">
+              <button
+                disabled={
+                  savingReviewIds.has(normalizationDialogState.transaction.id) ||
+                  transactionReviewStatus(normalizationDialogState.transaction) === "REVIEWED"
+                }
+                onClick={() => void handleMarkReviewed(normalizationDialogState.transaction).then(closeNormalizationDialog)}
+                type="button"
+              >
+                {savingReviewIds.has(normalizationDialogState.transaction.id) ? "Saving..." : "Mark Reviewed"}
+              </button>
               <button disabled={isSavingNormalization} onClick={closeNormalizationDialog} type="button">
                 Cancel
               </button>
@@ -3748,10 +4267,11 @@ function TransactionPanel({
               <span>Name</span>
               <input readOnly type="text" value={typeDialogState.transaction.normalized_name ?? "Unresolved"} />
             </label>
-            <label>
+            <label className={attentionFieldClass("transaction_type")}>
               <span>Type</span>
               <select
                 autoFocus
+                data-attention-field="transaction_type"
                 value={typeFormValues.transaction_type}
                 onChange={(event) => updateTypeFormValue("transaction_type", event.target.value as TransactionTypeValue)}
               >
@@ -3777,6 +4297,16 @@ function TransactionPanel({
               </div>
             ) : null}
             <div className="modal-actions">
+              <button
+                disabled={
+                  savingReviewIds.has(typeDialogState.transaction.id) ||
+                  transactionReviewStatus(typeDialogState.transaction) === "REVIEWED"
+                }
+                onClick={() => void handleMarkReviewed(typeDialogState.transaction).then(closeTypeDialog)}
+                type="button"
+              >
+                {savingReviewIds.has(typeDialogState.transaction.id) ? "Saving..." : "Mark Reviewed"}
+              </button>
               <button disabled={isSavingType} onClick={closeTypeDialog} type="button">
                 Cancel
               </button>
@@ -3809,10 +4339,11 @@ function TransactionPanel({
                 value={labelFor(transactionTypeLabels, transactionTypeValue(categoryDialogState.transaction))}
               />
             </label>
-            <label>
+            <label className={attentionFieldClass("main_category")}>
               <span>Main Category</span>
               <select
                 autoFocus
+                data-attention-field="main_category"
                 value={categoryFormValues.main_category}
                 onChange={(event) => updateCategoryFormValue("main_category", event.target.value as CategoryMainValue)}
               >
@@ -3823,9 +4354,10 @@ function TransactionPanel({
                 ))}
               </select>
             </label>
-            <label>
+            <label className={attentionFieldClass("subcategory")}>
               <span>Subcategory</span>
               <select
+                data-attention-field="subcategory"
                 value={categoryFormValues.subcategory}
                 onChange={(event) =>
                   updateCategoryFormValue("subcategory", event.target.value as CategorySubcategoryValue)
@@ -3858,6 +4390,16 @@ function TransactionPanel({
               </div>
             ) : null}
             <div className="modal-actions">
+              <button
+                disabled={
+                  savingReviewIds.has(categoryDialogState.transaction.id) ||
+                  transactionReviewStatus(categoryDialogState.transaction) === "REVIEWED"
+                }
+                onClick={() => void handleMarkReviewed(categoryDialogState.transaction).then(closeCategoryDialog)}
+                type="button"
+              >
+                {savingReviewIds.has(categoryDialogState.transaction.id) ? "Saving..." : "Mark Reviewed"}
+              </button>
               <button disabled={isSavingCategory} onClick={closeCategoryDialog} type="button">
                 Cancel
               </button>

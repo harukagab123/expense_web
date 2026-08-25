@@ -1,5 +1,7 @@
 import { apiConfig } from "./config";
 import type {
+  AttentionCountResponse,
+  AttentionListResponse,
   CategoryCatalogResponse,
   FileManagerTree,
   SearchResponse,
@@ -102,6 +104,15 @@ export async function searchFileManager(queryText: string, signal?: AbortSignal)
 
 export async function getCategoryCatalog(): Promise<CategoryCatalogResponse> {
   return requestJson<CategoryCatalogResponse>("/api/categories/catalog");
+}
+
+export async function getAttention(limit = 100): Promise<AttentionListResponse> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return requestJson<AttentionListResponse>(`/api/attention?${query.toString()}`);
+}
+
+export async function getAttentionCount(): Promise<AttentionCountResponse> {
+  return requestJson<AttentionCountResponse>("/api/attention/count");
 }
 
 export async function createFolder(name: string, parentFolderId: number | null) {
