@@ -4,6 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from sqlalchemy import Engine, create_engine
+from sqlalchemy import event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -23,7 +24,17 @@ def get_engine() -> Engine:
     settings = get_settings()
     _ensure_sqlite_parent(settings.database_url)
     connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-    return create_engine(settings.database_url, connect_args=connect_args, pool_pre_ping=True)
+    engine = create_engine(settings.database_url, connect_args=connect_args, pool_pre_ping=True)
+
+    if settings.database_url.startswith("sqlite"):
+
+        @event.listens_for(engine, "connect")
+        def _enable_sqlite_foreign_keys(dbapi_connection, _) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+    return engine
 
 
 @lru_cache

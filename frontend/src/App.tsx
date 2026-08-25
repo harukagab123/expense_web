@@ -1,112 +1,3970 @@
-import { useCallback, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import "./App.css";
-import { getHealth } from "./api/health";
+import {
+  bulkUpdateTransactionTypes,
+  bulkUpdateTransactionCategories,
+  bulkUpdateTransactionInclusion,
+  categorizeTransactions,
+  classifyTransactionTypes,
+  createTransactionForStatement,
+  createFolder,
+  deleteFolder,
+  deleteStoredFile,
+  detectStatement,
+  excludeTransaction,
+  extractTransactions,
+  fileDownloadUrl,
+  filePreviewUrl,
+  getFileManagerTree,
+  getStatementForFile,
+  getTransactionsForStatement,
+  normalizeTransactions,
+  searchFileManager,
+  updateFolder,
+  updateStatementForFile,
+  updateStoredFile,
+  updateTransaction,
+  updateTransactionCategory,
+  updateTransactionInclusion,
+  updateTransactionNormalization,
+  updateTransactionReview,
+  updateTransactionType,
+  uploadFiles,
+} from "./api/fileManager";
+import type {
+  FileManagerTree,
+  FolderNode,
+  SearchResult,
+  SelectedItem,
+  SortBy,
+  SortDirection,
+  StatementDetection,
+  StatementUpdate,
+  StatementTransaction,
+  StoredFile,
+  CategoryMainValue,
+  CategorySubcategoryValue,
+  TransactionDirection,
+  TransactionExtraction,
+  TransactionCategoryBulkPayload,
+  TransactionCategoryPayload,
+  TransactionInclusionBulkPayload,
+  TransactionInclusionPayload,
+  TransactionNormalizationPayload,
+  TransactionPayload,
+  TransactionReviewPayload,
+  TransactionTypeBulkPayload,
+  TransactionTypePayload,
+  TransactionTypeValue,
+} from "./types/fileManager";
 
-type ConnectionState = "checking" | "connected" | "unavailable";
+type MoveDialogState =
+  | { type: "folder"; id: number; name: string }
+  | { type: "file"; id: number; name: string }
+  | null;
 
-type StatusState = {
-  backend: ConnectionState;
-  database: ConnectionState;
-  message: string;
-  isError: boolean;
+type NameDialogState =
+  | { type: "create-folder"; title: string; label: string; initialValue: string }
+  | { type: "rename-folder"; id: number; title: string; label: string; initialValue: string }
+  | { type: "rename-file"; id: number; title: string; label: string; initialValue: string }
+  | null;
+
+type ConfirmDialogState =
+  | { type: "folder"; id: number; name: string }
+  | { type: "file"; id: number; name: string }
+  | null;
+
+type StatementEditValues = {
+  document_type: string;
+  institution: string;
+  product_name: string;
+  account_type: string;
+  account_last_four: string;
+  statement_start_date: string;
+  statement_end_date: string;
 };
 
-const checkingState: StatusState = {
-  backend: "checking",
-  database: "checking",
-  message: "Checking application...",
-  isError: false,
+type TransactionSortBy =
+  | "source_order"
+  | "normalized_name"
+  | "transaction_type"
+  | "main_category"
+  | "subcategory"
+  | "transaction_date"
+  | "amount";
+
+type TransactionFormValues = {
+  transaction_date: string;
+  transaction_detail: string;
+  amount: string;
+  direction: TransactionDirection;
 };
 
-function badgeLabel(state: ConnectionState): string {
-  if (state === "connected") {
-    return "Connected";
-  }
+type TransactionDialogState =
+  | { mode: "add"; transaction?: undefined }
+  | { mode: "edit"; transaction: StatementTransaction }
+  | null;
 
-  if (state === "checking") {
-    return "Checking";
-  }
+type NormalizationDialogState = { transaction: StatementTransaction } | null;
 
-  return "Unavailable";
+type NormalizationFilter = "all" | "normalized" | "needs_review" | "user_edited" | "unresolved";
+
+type TypeDialogState = { transaction: StatementTransaction } | null;
+
+type TypeFilter = "all" | "classified" | "needs_review" | "user_edited" | "included" | "excluded" | "unknown";
+
+type CategoryDialogState = { transaction: StatementTransaction } | null;
+
+type CategoryFilter =
+  | "all"
+  | "auto"
+  | "home"
+  | "business"
+  | "personal"
+  | "uncategorized"
+  | "needs_review"
+  | "not_applicable";
+
+type InclusionFilter = "all" | "included" | "excluded" | "needs_review" | "reviewed";
+
+type NormalizationFormValues = {
+  normalized_name: string;
+  use_for_future: boolean;
+};
+
+type TypeFormValues = {
+  transaction_type: TransactionTypeValue;
+  use_for_future: boolean;
+};
+
+type BulkTypeFormValues = {
+  transaction_type: TransactionTypeValue;
+  overwrite_user_edits: boolean;
+};
+
+type CategoryFormValues = {
+  main_category: CategoryMainValue;
+  subcategory: CategorySubcategoryValue;
+  use_for_future: boolean;
+};
+
+type BulkCategoryFormValues = {
+  main_category: CategoryMainValue;
+  subcategory: CategorySubcategoryValue;
+  overwrite_user_edits: boolean;
+};
+
+const emptyTree: FileManagerTree = {
+  type: "root",
+  name: "My Files",
+  folders: [],
+  files: [],
+};
+
+const sortOptions: Array<{ value: SortBy; label: string }> = [
+  { value: "name", label: "Name" },
+  { value: "created_at", label: "Date Created" },
+  { value: "updated_at", label: "Date Modified" },
+  { value: "file_size", label: "File Size" },
+];
+
+const documentTypeLabels: Record<string, string> = {
+  BANK_STATEMENT: "Bank Statement",
+  CREDIT_CARD_STATEMENT: "Credit Card Statement",
+  PAYMENT_ACCOUNT_STATEMENT: "Payment Account Statement",
+  OTHER_DOCUMENT: "Other Document",
+  UNKNOWN: "Unknown",
+};
+
+const institutionLabels: Record<string, string> = {
+  CHASE: "Chase",
+  CAPITAL_ONE: "Capital One",
+  AMEX: "American Express",
+  PAYPAL: "PayPal",
+  TJX: "TJX / TJ Maxx",
+  AMAZON: "Amazon",
+  OTHER_BANK: "Other Bank",
+  UNKNOWN: "Unknown",
+};
+
+const accountTypeLabels: Record<string, string> = {
+  CHECKING: "Checking",
+  SAVINGS: "Savings",
+  CREDIT_CARD: "Credit Card",
+  PAYMENT_ACCOUNT: "Payment Account",
+  OTHER: "Other",
+  UNKNOWN: "Unknown",
+};
+
+const detectionStatusLabels: Record<string, string> = {
+  NOT_ANALYZED: "Not Analyzed",
+  ANALYZING: "Analyzing",
+  DETECTED: "Detected",
+  NEEDS_REVIEW: "Needs Review",
+  NOT_A_STATEMENT: "Not a Statement",
+  FAILED: "Failed",
+};
+
+const extractionStatusLabels: Record<string, string> = {
+  NOT_EXTRACTED: "Not Extracted",
+  EXTRACTING: "Extracting",
+  EXTRACTED: "Extracted",
+  NEEDS_REVIEW: "Needs Review",
+  FAILED: "Failed",
+  UNSUPPORTED: "Unsupported",
+};
+
+const normalizationStatusLabels: Record<string, string> = {
+  NOT_NORMALIZED: "Not Normalized",
+  NORMALIZED: "Normalized",
+  NEEDS_REVIEW: "Needs Review",
+  USER_CONFIRMED: "User Confirmed",
+};
+
+const transactionTypeLabels: Record<string, string> = {
+  EXPENSE: "Expense",
+  INCOME: "Income",
+  TRANSFER: "Transfer",
+  CREDIT_CARD_PAYMENT: "Credit Card Payment",
+  REFUND: "Refund",
+  ATM_CASH_WITHDRAWAL: "ATM Cash Withdrawal",
+  CHECK: "Check",
+  BANK_FEE: "Bank Fee",
+  INTEREST: "Interest",
+  OTHER: "Other",
+  UNKNOWN: "Unknown",
+};
+
+const typeStatusLabels: Record<string, string> = {
+  NOT_CLASSIFIED: "Not Classified",
+  CLASSIFIED: "Classified",
+  NEEDS_REVIEW: "Needs Review",
+  USER_CONFIRMED: "User Confirmed",
+};
+
+const suggestedIncludeLabels: Record<string, string> = {
+  YES: "Include",
+  NO: "Exclude",
+  REVIEW: "Review",
+};
+
+const categoryLabels: Record<string, string> = {
+  AUTO_EXPENSE: "AUTO EXPENSE",
+  BUSINESS_USE_OF_HOME: "BUSINESS USE OF HOME",
+  PROFIT_LOSS_BUSINESS: "PROFIT OR LOSS FROM BUSINESS",
+  PERSONAL_INTERNAL: "PERSONAL / INTERNAL",
+};
+
+const subcategoryLabels: Record<string, string> = {
+  AUTO_GAS: "Gas",
+  AUTO_INSURANCE: "Insurance",
+  AUTO_MAINTENANCE: "Car Maintenance",
+  AUTO_PARKING: "Parking Fee",
+  AUTO_TIRES: "Tires",
+  AUTO_TOLLS: "Tolls",
+  AUTO_CAR_PAYMENT: "Car Payment",
+  HOME_INSURANCE: "Insurance",
+  HOME_RENT: "Rent",
+  HOME_REPAIRS_MAINTENANCE: "Repairs and Maintenance",
+  HOME_UTILITIES: "Utilities",
+  HOME_TELECOM_INTERNET: "Telecom/Internet",
+  HOME_OTHER_EXPENSE: "Other Expense",
+  BUSINESS_MATERIALS: "Materials",
+  BUSINESS_ADVERTISING: "Advertising",
+  BUSINESS_INTEREST_OTHER: "Interest - Other",
+  BUSINESS_LEGAL_PROFESSIONAL: "Legal and Professional Services",
+  BUSINESS_OFFICE_EXPENSE: "Office Expense",
+  BUSINESS_OTHER_SUPPLIES: "Other Supplies",
+  BUSINESS_TRAVEL: "Travel",
+  BUSINESS_TOTAL_MEALS: "Total Meals",
+  BUSINESS_TRANSPORTATION: "Transportation",
+  BUSINESS_GOVERNMENT: "Government",
+  BUSINESS_DONATIONS: "Donations",
+  BUSINESS_BANK_MEMBERSHIP: "Bank Membership",
+  BUSINESS_MEDICAL: "Medical",
+  BUSINESS_EDUCATION_LEARNING: "Education & Learning",
+  PERSONAL_OTHER_ITEMS: "Other Personal Items",
+  PERSONAL: "Personal",
+  UNCATEGORIZED: "Uncategorized",
+};
+
+const categoryStatusLabels: Record<string, string> = {
+  NOT_CATEGORIZED: "Not Categorized",
+  CATEGORIZED: "Categorized",
+  NEEDS_REVIEW: "Needs Review",
+  USER_CONFIRMED: "User Confirmed",
+  NOT_APPLICABLE: "Not Applicable",
+};
+
+const reviewStatusLabels: Record<string, string> = {
+  PENDING: "Pending",
+  NEEDS_REVIEW: "Needs Review",
+  REVIEWED: "Reviewed",
+};
+
+const directionLabels: Record<string, string> = {
+  INFLOW: "Inflow",
+  OUTFLOW: "Outflow",
+  UNKNOWN: "Unknown",
+};
+
+const transactionDirectionOptions: Array<{ value: TransactionDirection; label: string }> = [
+  { value: "OUTFLOW", label: "Outflow" },
+  { value: "INFLOW", label: "Inflow" },
+  { value: "UNKNOWN", label: "Unknown" },
+];
+
+const normalizationFilterOptions: Array<{ value: NormalizationFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "normalized", label: "Normalized" },
+  { value: "needs_review", label: "Needs Review" },
+  { value: "user_edited", label: "User Edited" },
+  { value: "unresolved", label: "Unresolved" },
+];
+
+const typeOptions: Array<{ value: TransactionTypeValue; label: string }> = [
+  { value: "EXPENSE", label: "Expense" },
+  { value: "INCOME", label: "Income" },
+  { value: "TRANSFER", label: "Transfer" },
+  { value: "CREDIT_CARD_PAYMENT", label: "Credit Card Payment" },
+  { value: "REFUND", label: "Refund" },
+  { value: "ATM_CASH_WITHDRAWAL", label: "ATM Cash Withdrawal" },
+  { value: "CHECK", label: "Check" },
+  { value: "BANK_FEE", label: "Bank Fee" },
+  { value: "INTEREST", label: "Interest" },
+  { value: "OTHER", label: "Other" },
+  { value: "UNKNOWN", label: "Unknown" },
+];
+
+const typeFilterOptions: Array<{ value: TypeFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "classified", label: "Classified" },
+  { value: "needs_review", label: "Needs Review" },
+  { value: "user_edited", label: "User Edited" },
+  { value: "included", label: "Recommended Include" },
+  { value: "excluded", label: "Recommended Exclude" },
+  { value: "unknown", label: "Unknown" },
+];
+
+const categoryOptions: Array<{ value: CategoryMainValue; label: string; subcategories: Array<{ value: CategorySubcategoryValue; label: string }> }> = [
+  {
+    value: "AUTO_EXPENSE",
+    label: "AUTO EXPENSE",
+    subcategories: [
+      { value: "AUTO_GAS", label: "Gas" },
+      { value: "AUTO_INSURANCE", label: "Insurance" },
+      { value: "AUTO_MAINTENANCE", label: "Car Maintenance" },
+      { value: "AUTO_PARKING", label: "Parking Fee" },
+      { value: "AUTO_TIRES", label: "Tires" },
+      { value: "AUTO_TOLLS", label: "Tolls" },
+      { value: "AUTO_CAR_PAYMENT", label: "Car Payment" },
+    ],
+  },
+  {
+    value: "BUSINESS_USE_OF_HOME",
+    label: "BUSINESS USE OF HOME",
+    subcategories: [
+      { value: "HOME_INSURANCE", label: "Insurance" },
+      { value: "HOME_RENT", label: "Rent" },
+      { value: "HOME_REPAIRS_MAINTENANCE", label: "Repairs and Maintenance" },
+      { value: "HOME_UTILITIES", label: "Utilities" },
+      { value: "HOME_TELECOM_INTERNET", label: "Telecom/Internet" },
+      { value: "HOME_OTHER_EXPENSE", label: "Other Expense" },
+    ],
+  },
+  {
+    value: "PROFIT_LOSS_BUSINESS",
+    label: "PROFIT OR LOSS FROM BUSINESS",
+    subcategories: [
+      { value: "BUSINESS_MATERIALS", label: "Materials" },
+      { value: "BUSINESS_ADVERTISING", label: "Advertising" },
+      { value: "BUSINESS_INTEREST_OTHER", label: "Interest - Other" },
+      { value: "BUSINESS_LEGAL_PROFESSIONAL", label: "Legal and Professional Services" },
+      { value: "BUSINESS_OFFICE_EXPENSE", label: "Office Expense" },
+      { value: "BUSINESS_OTHER_SUPPLIES", label: "Other Supplies" },
+      { value: "BUSINESS_TRAVEL", label: "Travel" },
+      { value: "BUSINESS_TOTAL_MEALS", label: "Total Meals" },
+      { value: "BUSINESS_TRANSPORTATION", label: "Transportation" },
+      { value: "BUSINESS_GOVERNMENT", label: "Government" },
+      { value: "BUSINESS_DONATIONS", label: "Donations" },
+      { value: "BUSINESS_BANK_MEMBERSHIP", label: "Bank Membership" },
+      { value: "BUSINESS_MEDICAL", label: "Medical" },
+      { value: "BUSINESS_EDUCATION_LEARNING", label: "Education & Learning" },
+    ],
+  },
+  {
+    value: "PERSONAL_INTERNAL",
+    label: "PERSONAL / INTERNAL",
+    subcategories: [
+      { value: "PERSONAL_OTHER_ITEMS", label: "Other Personal Items" },
+      { value: "PERSONAL", label: "Personal" },
+      { value: "UNCATEGORIZED", label: "Uncategorized" },
+    ],
+  },
+];
+
+const categoryFilterOptions: Array<{ value: CategoryFilter; label: string }> = [
+  { value: "all", label: "All Categories" },
+  { value: "auto", label: "Auto Expense" },
+  { value: "home", label: "Business Use of Home" },
+  { value: "business", label: "Profit or Loss From Business" },
+  { value: "personal", label: "Personal / Internal" },
+  { value: "uncategorized", label: "Uncategorized" },
+  { value: "needs_review", label: "Needs Review" },
+  { value: "not_applicable", label: "Not Applicable" },
+];
+
+const inclusionFilterOptions: Array<{ value: InclusionFilter; label: string }> = [
+  { value: "all", label: "All Selections" },
+  { value: "included", label: "Included" },
+  { value: "excluded", label: "Excluded" },
+  { value: "needs_review", label: "Needs Review" },
+  { value: "reviewed", label: "Reviewed" },
+];
+
+const documentTypeOptions = optionsFromLabels(documentTypeLabels);
+const institutionOptions = optionsFromLabels(institutionLabels);
+const accountTypeOptions = optionsFromLabels(accountTypeLabels);
+
+function optionsFromLabels(labels: Record<string, string>): Array<{ value: string; label: string }> {
+  return Object.entries(labels).map(([value, label]) => ({ value, label }));
 }
 
-function StatusBadge({ state }: { state: ConnectionState }) {
-  return <span className={`status-badge status-badge--${state}`}>{badgeLabel(state)}</span>;
+function formatBytes(bytes: number): string {
+  if (bytes === 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function formatDateOnly(value: string | null): string {
+  if (!value) {
+    return "Unknown";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+  }).format(new Date(`${value}T00:00:00`));
+}
+
+function formatDateRange(startDate: string | null, endDate: string | null): string {
+  if (!startDate && !endDate) {
+    return "Unknown";
+  }
+  return `${formatDateOnly(startDate)} to ${formatDateOnly(endDate)}`;
+}
+
+function labelFor(labels: Record<string, string>, value: string | null | undefined): string {
+  if (!value) {
+    return "Unknown";
+  }
+  return labels[value] ?? value.replaceAll("_", " ").toLowerCase();
+}
+
+function formatConfidence(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "0%";
+  }
+  return `${Math.round(value * 100)}%`;
+}
+
+function transactionNormalizationStatus(transaction: StatementTransaction): string {
+  return transaction.normalization_status ?? "NOT_NORMALIZED";
+}
+
+function transactionNormalizationSource(transaction: StatementTransaction): string {
+  return transaction.normalization_source ?? "UNRESOLVED";
+}
+
+function transactionNormalizationConfidence(transaction: StatementTransaction): number {
+  return Number.isFinite(transaction.normalization_confidence) ? transaction.normalization_confidence : 0;
+}
+
+function isTransactionTypeValue(value: string | null | undefined): value is TransactionTypeValue {
+  return typeOptions.some((option) => option.value === value);
+}
+
+function transactionTypeValue(transaction: StatementTransaction): TransactionTypeValue {
+  const value = transaction.transaction_type ?? "UNKNOWN";
+  return isTransactionTypeValue(value) ? value : "UNKNOWN";
+}
+
+function transactionTypeStatus(transaction: StatementTransaction): string {
+  return transaction.type_status ?? "NOT_CLASSIFIED";
+}
+
+function transactionTypeSource(transaction: StatementTransaction): string {
+  return transaction.type_source ?? "UNRESOLVED";
+}
+
+function transactionTypeConfidence(transaction: StatementTransaction): number {
+  return Number.isFinite(transaction.type_confidence) ? transaction.type_confidence : 0;
+}
+
+function transactionSuggestedInclude(transaction: StatementTransaction): string {
+  return transaction.suggested_include ?? "REVIEW";
+}
+
+function transactionNeedsTypeReview(transaction: StatementTransaction): boolean {
+  return transactionTypeStatus(transaction) === "NEEDS_REVIEW" || transactionTypeValue(transaction) === "UNKNOWN";
+}
+
+function transactionMatchesTypeFilter(transaction: StatementTransaction, filter: TypeFilter): boolean {
+  const status = transactionTypeStatus(transaction);
+  const type = transactionTypeValue(transaction);
+  const suggestedInclude = transactionSuggestedInclude(transaction);
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "classified") {
+    return ["CLASSIFIED", "USER_CONFIRMED"].includes(status) && type !== "UNKNOWN";
+  }
+  if (filter === "needs_review") {
+    return status === "NEEDS_REVIEW";
+  }
+  if (filter === "user_edited") {
+    return transaction.user_edited_type;
+  }
+  if (filter === "included") {
+    return suggestedInclude === "YES";
+  }
+  if (filter === "excluded") {
+    return suggestedInclude === "NO";
+  }
+  return type === "UNKNOWN";
+}
+
+function typeToFormValues(transaction: StatementTransaction): TypeFormValues {
+  return {
+    transaction_type: transactionTypeValue(transaction),
+    use_for_future: false,
+  };
+}
+
+function validateTypeForm(values: TypeFormValues): string {
+  if (!isTransactionTypeValue(values.transaction_type)) {
+    return "Transaction type is required.";
+  }
+  return "";
+}
+
+function typePayloadFromValues(values: TypeFormValues): TransactionTypePayload {
+  return {
+    transaction_type: values.transaction_type,
+    use_for_future: values.use_for_future,
+  };
+}
+
+function bulkTypePayloadFromValues(
+  selectedTransactionIds: number[],
+  values: BulkTypeFormValues,
+): TransactionTypeBulkPayload {
+  return {
+    transaction_ids: selectedTransactionIds,
+    transaction_type: values.transaction_type,
+    overwrite_user_edits: values.overwrite_user_edits,
+  };
+}
+
+function isCategoryMainValue(value: string | null | undefined): value is CategoryMainValue {
+  return categoryOptions.some((option) => option.value === value);
+}
+
+function isCategorySubcategoryValue(value: string | null | undefined): value is CategorySubcategoryValue {
+  return categoryOptions.some((option) => option.subcategories.some((subcategory) => subcategory.value === value));
+}
+
+function subcategoryOptionsFor(mainCategory: CategoryMainValue): Array<{ value: CategorySubcategoryValue; label: string }> {
+  return categoryOptions.find((option) => option.value === mainCategory)?.subcategories ?? [];
+}
+
+function defaultSubcategoryFor(mainCategory: CategoryMainValue): CategorySubcategoryValue {
+  return subcategoryOptionsFor(mainCategory)[0]?.value ?? "UNCATEGORIZED";
+}
+
+function categoryStatus(transaction: StatementTransaction): string {
+  return transaction.category_status ?? "NOT_CATEGORIZED";
+}
+
+function categorySource(transaction: StatementTransaction): string {
+  return transaction.category_source ?? "UNRESOLVED";
+}
+
+function categoryConfidence(transaction: StatementTransaction): number {
+  return Number.isFinite(transaction.category_confidence) ? transaction.category_confidence : 0;
+}
+
+function categoryNeedsReview(transaction: StatementTransaction): boolean {
+  return categoryStatus(transaction) === "NEEDS_REVIEW";
+}
+
+function categoryMainValue(transaction: StatementTransaction): CategoryMainValue | null {
+  const value = transaction.main_category;
+  return isCategoryMainValue(value) ? value : null;
+}
+
+function categorySubcategoryValue(transaction: StatementTransaction): CategorySubcategoryValue | null {
+  const value = transaction.subcategory;
+  return isCategorySubcategoryValue(value) ? value : null;
+}
+
+function categoryPairLabel(transaction: StatementTransaction): string {
+  const mainCategory = categoryMainValue(transaction);
+  const subcategory = categorySubcategoryValue(transaction);
+  if (categoryStatus(transaction) === "NOT_APPLICABLE") {
+    return "Not Applicable";
+  }
+  if (!mainCategory || !subcategory) {
+    return "Uncategorized";
+  }
+  return `${labelFor(categoryLabels, mainCategory)} / ${labelFor(subcategoryLabels, subcategory)}`;
+}
+
+function transactionMatchesCategoryFilter(transaction: StatementTransaction, filter: CategoryFilter): boolean {
+  const mainCategory = categoryMainValue(transaction);
+  const subcategory = categorySubcategoryValue(transaction);
+  const status = categoryStatus(transaction);
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "auto") {
+    return mainCategory === "AUTO_EXPENSE";
+  }
+  if (filter === "home") {
+    return mainCategory === "BUSINESS_USE_OF_HOME";
+  }
+  if (filter === "business") {
+    return mainCategory === "PROFIT_LOSS_BUSINESS";
+  }
+  if (filter === "personal") {
+    return mainCategory === "PERSONAL_INTERNAL";
+  }
+  if (filter === "uncategorized") {
+    return subcategory === "UNCATEGORIZED" || status === "NOT_CATEGORIZED";
+  }
+  if (filter === "needs_review") {
+    return status === "NEEDS_REVIEW";
+  }
+  return status === "NOT_APPLICABLE";
+}
+
+function categoryToFormValues(transaction: StatementTransaction): CategoryFormValues {
+  const mainCategory = categoryMainValue(transaction) ?? "PERSONAL_INTERNAL";
+  const subcategory = categorySubcategoryValue(transaction);
+  const validSubcategories = subcategoryOptionsFor(mainCategory);
+  return {
+    main_category: mainCategory,
+    subcategory: subcategory && validSubcategories.some((option) => option.value === subcategory)
+      ? subcategory
+      : defaultSubcategoryFor(mainCategory),
+    use_for_future: false,
+  };
+}
+
+function validateCategoryForm(values: CategoryFormValues): string {
+  if (!isCategoryMainValue(values.main_category)) {
+    return "Main category is required.";
+  }
+  if (!subcategoryOptionsFor(values.main_category).some((option) => option.value === values.subcategory)) {
+    return "Subcategory is not valid for the selected main category.";
+  }
+  return "";
+}
+
+function categoryPayloadFromValues(values: CategoryFormValues): TransactionCategoryPayload {
+  return {
+    main_category: values.main_category,
+    subcategory: values.subcategory,
+    use_for_future: values.use_for_future,
+  };
+}
+
+function bulkCategoryPayloadFromValues(
+  selectedTransactionIds: number[],
+  values: BulkCategoryFormValues,
+): TransactionCategoryBulkPayload {
+  return {
+    transaction_ids: selectedTransactionIds,
+    main_category: values.main_category,
+    subcategory: values.subcategory,
+    overwrite_user_edits: values.overwrite_user_edits,
+  };
+}
+
+function transactionIncluded(transaction: StatementTransaction): boolean {
+  return transaction.include_in_expenses === true;
+}
+
+function transactionReviewStatus(transaction: StatementTransaction): string {
+  return transaction.review_status ?? "PENDING";
+}
+
+function transactionNeedsPhase8Review(transaction: StatementTransaction): boolean {
+  if (transactionReviewStatus(transaction) === "REVIEWED") {
+    return false;
+  }
+  return (
+    transactionReviewStatus(transaction) === "NEEDS_REVIEW" ||
+    transaction.needs_review ||
+    transactionNormalizationStatus(transaction) === "NEEDS_REVIEW" ||
+    transactionNeedsTypeReview(transaction) ||
+    transactionSuggestedInclude(transaction) === "REVIEW" ||
+    categoryStatus(transaction) === "NEEDS_REVIEW" ||
+    categoryStatus(transaction) === "NOT_CATEGORIZED" ||
+    categorySubcategoryValue(transaction) === "UNCATEGORIZED"
+  );
+}
+
+function transactionMatchesInclusionFilter(transaction: StatementTransaction, filter: InclusionFilter): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "included") {
+    return transactionIncluded(transaction);
+  }
+  if (filter === "excluded") {
+    return !transactionIncluded(transaction);
+  }
+  if (filter === "needs_review") {
+    return transactionNeedsPhase8Review(transaction);
+  }
+  return transactionReviewStatus(transaction) === "REVIEWED";
+}
+
+function transactionInclusionWarning(transaction: StatementTransaction): string | null {
+  const type = transactionTypeValue(transaction);
+  const suggestion = transactionSuggestedInclude(transaction);
+  if (type === "CREDIT_CARD_PAYMENT") {
+    return "Recommended Exclude - may duplicate card purchases";
+  }
+  if (["INCOME", "REFUND"].includes(type) || suggestion === "NO") {
+    return "Recommended Exclude";
+  }
+  if (["TRANSFER", "ATM_CASH_WITHDRAWAL", "CHECK", "UNKNOWN"].includes(type) || suggestion === "REVIEW") {
+    return "Recommended Review";
+  }
+  return null;
+}
+
+function moneyToCents(value: string | number | null): number {
+  if (value === null) {
+    return 0;
+  }
+  const match = String(value).trim().replaceAll(",", "").match(/^(-?)(\d+)(?:\.(\d{0,2}))?$/);
+  if (!match) {
+    return 0;
+  }
+  const cents = `${match[3] ?? ""}00`.slice(0, 2);
+  const total = Number.parseInt(match[2], 10) * 100 + Number.parseInt(cents, 10);
+  return match[1] === "-" ? -total : total;
+}
+
+function formatMoneyCents(cents: number): string {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+  }).format(cents / 100);
+}
+
+function selectedAmountCents(transactions: StatementTransaction[]): number {
+  return transactions.reduce((total, transaction) => {
+    if (!transactionIncluded(transaction)) {
+      return total;
+    }
+    return total + moneyToCents(transaction.amount);
+  }, 0);
+}
+
+function replaceTransactionInList(
+  transactions: StatementTransaction[],
+  updatedTransaction: StatementTransaction,
+): StatementTransaction[] {
+  return transactions.map((transaction) =>
+    transaction.id === updatedTransaction.id ? updatedTransaction : transaction,
+  );
+}
+
+function mergeUpdatedTransactions(
+  transactions: StatementTransaction[],
+  updatedTransactions: StatementTransaction[],
+): StatementTransaction[] {
+  const updates = new Map(updatedTransactions.map((transaction) => [transaction.id, transaction]));
+  return transactions.map((transaction) => updates.get(transaction.id) ?? transaction);
+}
+
+function formatMoney(value: string | number | null): string {
+  if (value === null) {
+    return "Unknown";
+  }
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return String(value);
+  }
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+  }).format(numericValue);
+}
+
+function transactionToFormValues(transaction: StatementTransaction): TransactionFormValues {
+  return {
+    transaction_date: transaction.transaction_date,
+    transaction_detail: transaction.transaction_detail,
+    amount: String(transaction.amount),
+    direction: (transaction.direction as TransactionDirection) || "UNKNOWN",
+  };
+}
+
+function emptyTransactionFormValues(): TransactionFormValues {
+  return {
+    transaction_date: "",
+    transaction_detail: "",
+    amount: "",
+    direction: "OUTFLOW",
+  };
+}
+
+function validateTransactionForm(values: TransactionFormValues): string {
+  if (!values.transaction_date) {
+    return "Transaction date is required.";
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(values.transaction_date)) {
+    return "Transaction date must use YYYY-MM-DD format.";
+  }
+  const parsedDate = new Date(`${values.transaction_date}T00:00:00`);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return "Transaction date must be valid.";
+  }
+  if (!values.transaction_detail.trim()) {
+    return "Transaction detail is required.";
+  }
+  if (!/^\d+(\.\d{1,2})?$/.test(values.amount.trim())) {
+    return "Amount must be valid money, such as 100 or 100.00.";
+  }
+  if (!["INFLOW", "OUTFLOW", "UNKNOWN"].includes(values.direction)) {
+    return "Direction must be Inflow, Outflow, or Unknown.";
+  }
+  return "";
+}
+
+function transactionPayloadFromValues(values: TransactionFormValues): Required<TransactionPayload> {
+  return {
+    transaction_date: values.transaction_date,
+    transaction_detail: values.transaction_detail.trim(),
+    amount: values.amount.trim(),
+    direction: values.direction,
+  };
+}
+
+function normalizationToFormValues(transaction: StatementTransaction): NormalizationFormValues {
+  return {
+    normalized_name: transaction.normalized_name ?? "",
+    use_for_future: false,
+  };
+}
+
+function validateNormalizationForm(values: NormalizationFormValues): string {
+  if (!values.normalized_name.trim()) {
+    return "Name is required.";
+  }
+  return "";
+}
+
+function normalizationPayloadFromValues(values: NormalizationFormValues): TransactionNormalizationPayload {
+  return {
+    normalized_name: values.normalized_name.trim().replace(/\s+/g, " "),
+    use_for_future: values.use_for_future,
+  };
+}
+
+function transactionMatchesNormalizationFilter(
+  transaction: StatementTransaction,
+  filter: NormalizationFilter,
+): boolean {
+  const status = transactionNormalizationStatus(transaction);
+  const source = transactionNormalizationSource(transaction);
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "normalized") {
+    return Boolean(
+      transaction.normalized_name &&
+        ["NORMALIZED", "USER_CONFIRMED"].includes(status),
+    );
+  }
+  if (filter === "needs_review") {
+    return status === "NEEDS_REVIEW";
+  }
+  if (filter === "user_edited") {
+    return transaction.user_edited_normalization;
+  }
+  return (
+    !transaction.normalized_name ||
+    source === "UNRESOLVED" ||
+    status === "NOT_NORMALIZED"
+  );
+}
+
+function transactionMatchesSearch(transaction: StatementTransaction, query: string): boolean {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return true;
+  }
+  return [transaction.normalized_name ?? "", transaction.transaction_detail].some((value) =>
+    value.toLowerCase().includes(normalizedQuery),
+  );
+}
+
+function statementToEditValues(statement: StatementDetection): StatementEditValues {
+  return {
+    document_type: statement.document_type,
+    institution: statement.institution,
+    product_name: statement.product_name ?? "",
+    account_type: statement.account_type,
+    account_last_four: statement.account_last_four ?? "",
+    statement_start_date: statement.statement_start_date ?? "",
+    statement_end_date: statement.statement_end_date ?? "",
+  };
+}
+
+function statementPayloadFromValues(values: StatementEditValues): StatementUpdate {
+  return {
+    document_type: values.document_type,
+    institution: values.institution,
+    product_name: values.product_name.trim() || null,
+    account_type: values.account_type,
+    account_last_four: values.account_last_four.trim() || null,
+    statement_start_date: values.statement_start_date || null,
+    statement_end_date: values.statement_end_date || null,
+  };
+}
+
+function validateStatementEdit(values: StatementEditValues): string {
+  const lastFour = values.account_last_four.trim();
+  if (lastFour && !/^\d{1,4}$/.test(lastFour)) {
+    return "Account last four must contain 1 to 4 digits only.";
+  }
+  if (values.statement_start_date && values.statement_end_date) {
+    const start = new Date(`${values.statement_start_date}T00:00:00`);
+    const end = new Date(`${values.statement_end_date}T00:00:00`);
+    if (start > end) {
+      return "Statement start date must be on or before statement end date.";
+    }
+  }
+  return "";
+}
+
+function collectDescendantFolderIds(folder: FolderNode): number[] {
+  return folder.folders.flatMap((child) => [child.id, ...collectDescendantFolderIds(child)]);
+}
+
+function flattenFolders(folders: FolderNode[], trail: string[] = []): Array<{ id: number; label: string }> {
+  return folders.flatMap((folder) => {
+    const nextTrail = [...trail, folder.name];
+    return [
+      { id: folder.id, label: nextTrail.join(" > ") },
+      ...flattenFolders(folder.folders, nextTrail),
+    ];
+  });
+}
+
+function findFolder(folders: FolderNode[], folderId: number): FolderNode | undefined {
+  for (const folder of folders) {
+    if (folder.id === folderId) {
+      return folder;
+    }
+    const found = findFolder(folder.folders, folderId);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+function findFile(folders: FolderNode[], files: StoredFile[], fileId: number): StoredFile | undefined {
+  const rootMatch = files.find((file) => file.id === fileId);
+  if (rootMatch) {
+    return rootMatch;
+  }
+
+  for (const folder of folders) {
+    const directMatch = folder.files.find((file) => file.id === fileId);
+    if (directMatch) {
+      return directMatch;
+    }
+    const nestedMatch = findFile(folder.folders, [], fileId);
+    if (nestedMatch) {
+      return nestedMatch;
+    }
+  }
+
+  return undefined;
+}
+
+function folderPath(folders: FolderNode[], folderId: number): FolderNode[] {
+  for (const folder of folders) {
+    if (folder.id === folderId) {
+      return [folder];
+    }
+    const childPath = folderPath(folder.folders, folderId);
+    if (childPath.length > 0) {
+      return [folder, ...childPath];
+    }
+  }
+  return [];
+}
+
+function selectedFolderId(selected: SelectedItem, selectedFile: StoredFile | undefined): number | null {
+  if (selected.type === "folder") {
+    return selected.id;
+  }
+  if (selected.type === "file") {
+    return selectedFile?.folder_id ?? null;
+  }
+  return null;
+}
+
+function fileCanPreview(file: StoredFile): "image" | "pdf" | "unsupported" {
+  const name = file.display_name.toLowerCase();
+  if (
+    file.mime_type === "image/png" ||
+    file.mime_type === "image/jpeg" ||
+    name.endsWith(".png") ||
+    name.endsWith(".jpg") ||
+    name.endsWith(".jpeg")
+  ) {
+    return "image";
+  }
+  if (file.mime_type === "application/pdf" || name.endsWith(".pdf")) {
+    return "pdf";
+  }
+  return "unsupported";
+}
+
+function formatLocation(pathParts: string[]): string {
+  return pathParts.join(" > ");
+}
+
+function searchResultKey(result: SearchResult): string {
+  return `${result.type}-${result.id}`;
+}
+
+function scrollTreeRowIntoView(result: SearchResult) {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`[data-tree-key="${searchResultKey(result)}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  });
 }
 
 export default function App() {
-  const [status, setStatus] = useState<StatusState>(checkingState);
-  const [isChecking, setIsChecking] = useState(true);
+  const [tree, setTree] = useState<FileManagerTree>(emptyTree);
+  const [selected, setSelected] = useState<SelectedItem>({ type: "root" });
+  const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
+  const [search, setSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [sortBy, setSortBy] = useState<SortBy>("name");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isDragging, setIsDragging] = useState(false);
+  const [notice, setNotice] = useState("Loading file manager...");
+  const [error, setError] = useState("");
+  const [moveDialog, setMoveDialog] = useState<MoveDialogState>(null);
+  const [moveDestination, setMoveDestination] = useState<string>("root");
+  const [nameDialog, setNameDialog] = useState<NameDialogState>(null);
+  const [nameValue, setNameValue] = useState("");
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const searchRequestRef = useRef(0);
 
-  const checkApplication = useCallback(async () => {
-    setIsChecking(true);
-    setStatus(checkingState);
+  const selectedFolder = selected.type === "folder" ? findFolder(tree.folders, selected.id) : undefined;
+  const selectedFile = selected.type === "file" ? findFile(tree.folders, tree.files, selected.id) : undefined;
+  const uploadTargetFolderId = selectedFolderId(selected, selectedFile);
+  const allFolders = useMemo(() => flattenFolders(tree.folders), [tree.folders]);
+  const folderMoveExclusions = useMemo(() => {
+    if (moveDialog?.type !== "folder") {
+      return new Set<number>();
+    }
+    const folder = findFolder(tree.folders, moveDialog.id);
+    return new Set(folder ? [folder.id, ...collectDescendantFolderIds(folder)] : [moveDialog.id]);
+  }, [moveDialog, tree.folders]);
+
+  const breadcrumbs = useMemo(() => {
+    if (selected.type === "root") {
+      return [];
+    }
+    if (selected.type === "folder") {
+      return folderPath(tree.folders, selected.id);
+    }
+    if (selectedFile?.folder_id) {
+      return folderPath(tree.folders, selectedFile.folder_id);
+    }
+    return [];
+  }, [selected, selectedFile, tree.folders]);
+  const selectedLocationPath = formatLocation(["My Files", ...breadcrumbs.map((folder) => folder.name)]);
+
+  const selectedFolderContents = selectedFolder
+    ? { folders: selectedFolder.folders.length, files: selectedFolder.files.length }
+    : { folders: tree.folders.length, files: tree.files.length };
+
+  const loadTree = useCallback(async () => {
+    setIsLoading(true);
+    setError("");
 
     try {
-      const health = await getHealth();
-      const databaseConnected = health.database === "connected";
-
-      setStatus({
-        backend: "connected",
-        database: databaseConnected ? "connected" : "unavailable",
-        message: databaseConnected
-          ? "Backend and database are ready."
-          : "Backend is running, but the database check failed.",
-        isError: !databaseConnected,
-      });
-    } catch {
-      setStatus({
-        backend: "unavailable",
-        database: "unavailable",
-        message: "Backend unavailable. Start the backend and retry.",
-        isError: true,
-      });
+      const nextTree = await getFileManagerTree({ sortBy, sortDirection });
+      setTree(nextTree);
+      setNotice("File manager ready.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Backend unavailable.");
+      setNotice("Unable to load files.");
     } finally {
-      setIsChecking(false);
+      setIsLoading(false);
     }
-  }, []);
+  }, [sortBy, sortDirection]);
 
   useEffect(() => {
-    void checkApplication();
-  }, [checkApplication]);
+    void loadTree();
+  }, [loadTree]);
+
+  useEffect(() => {
+    const query = search.trim();
+    searchRequestRef.current += 1;
+    const requestId = searchRequestRef.current;
+
+    if (!query) {
+      setSearchResults([]);
+      setSearchError("");
+      setIsSearchLoading(false);
+      setIsSearchOpen(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsSearchOpen(true);
+    setIsSearchLoading(true);
+    setSearchError("");
+
+    const timeoutId = window.setTimeout(() => {
+      void searchFileManager(query, controller.signal)
+        .then((response) => {
+          if (searchRequestRef.current !== requestId) {
+            return;
+          }
+          setSearchResults(response.results);
+        })
+        .catch((caught) => {
+          if (controller.signal.aborted || searchRequestRef.current !== requestId) {
+            return;
+          }
+          setSearchResults([]);
+          setSearchError(caught instanceof Error ? caught.message : "Search failed.");
+        })
+        .finally(() => {
+          if (!controller.signal.aborted && searchRequestRef.current === requestId) {
+            setIsSearchLoading(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [search]);
+
+  function toggleFolder(folderId: number) {
+    setExpandedFolders((current) => {
+      const next = new Set(current);
+      if (next.has(folderId)) {
+        next.delete(folderId);
+      } else {
+        next.add(folderId);
+      }
+      return next;
+    });
+  }
+
+  function selectFolder(folderId: number) {
+    setSelected({ type: "folder", id: folderId });
+  }
+
+  function selectFile(fileId: number) {
+    setSelected({ type: "file", id: fileId });
+  }
+
+  function selectRoot() {
+    setSelected({ type: "root" });
+  }
+
+  function clearSearch() {
+    searchRequestRef.current += 1;
+    setSearch("");
+    setSearchResults([]);
+    setSearchError("");
+    setIsSearchLoading(false);
+    setIsSearchOpen(false);
+  }
+
+  function selectSearchResult(result: SearchResult) {
+    setExpandedFolders((current) => new Set([...current, ...result.expand_folder_ids]));
+    setSelected({ type: result.type, id: result.id });
+    clearSearch();
+    setNotice(`Selected ${result.type} "${result.name}".`);
+    scrollTreeRowIntoView(result);
+  }
+
+  function openNameDialog(dialog: Exclude<NameDialogState, null>) {
+    setError("");
+    setNameDialog(dialog);
+    setNameValue(dialog.initialValue);
+  }
+
+  async function submitNameDialog(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!nameDialog) {
+      return;
+    }
+
+    const value = nameValue.trim();
+    if (!value) {
+      setError(`${nameDialog.label} is required.`);
+      return;
+    }
+
+    try {
+      if (nameDialog.type === "create-folder") {
+        const folder = (await createFolder(value, uploadTargetFolderId)) as FolderNode;
+        if (uploadTargetFolderId !== null) {
+          setExpandedFolders((current) => new Set([...current, uploadTargetFolderId]));
+        }
+        setSelected({ type: "folder", id: folder.id });
+        setNotice(`Created folder "${folder.name}".`);
+      }
+
+      if (nameDialog.type === "rename-folder") {
+        await updateFolder(nameDialog.id, { name: value });
+        setNotice("Folder renamed.");
+      }
+
+      if (nameDialog.type === "rename-file") {
+        await updateStoredFile(nameDialog.id, { display_name: value });
+        setNotice("File renamed.");
+      }
+
+      setNameDialog(null);
+      await loadTree();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Name change failed.");
+    }
+  }
+
+  function handleCreateFolder() {
+    openNameDialog({
+      type: "create-folder",
+      title: "New Folder",
+      label: "Folder name",
+      initialValue: "",
+    });
+  }
+
+  function handleRenameSelected() {
+    if (selected.type === "folder" && selectedFolder) {
+      openNameDialog({
+        type: "rename-folder",
+        id: selectedFolder.id,
+        title: "Rename Folder",
+        label: "Folder name",
+        initialValue: selectedFolder.name,
+      });
+    }
+
+    if (selected.type === "file" && selectedFile) {
+      openNameDialog({
+        type: "rename-file",
+        id: selectedFile.id,
+        title: "Rename File",
+        label: "Filename",
+        initialValue: selectedFile.display_name,
+      });
+    }
+  }
+
+  function handleDeleteSelected() {
+    if (selected.type === "folder" && selectedFolder) {
+      setConfirmDialog({ type: "folder", id: selectedFolder.id, name: selectedFolder.name });
+    }
+
+    if (selected.type === "file" && selectedFile) {
+      setConfirmDialog({ type: "file", id: selectedFile.id, name: selectedFile.display_name });
+    }
+  }
+
+  async function confirmDelete() {
+    if (!confirmDialog) {
+      return;
+    }
+
+    try {
+      if (confirmDialog.type === "folder") {
+        await deleteFolder(confirmDialog.id);
+        setNotice("Folder deleted.");
+      } else {
+        await deleteStoredFile(confirmDialog.id);
+        setNotice("File deleted.");
+      }
+      setSelected({ type: "root" });
+      setConfirmDialog(null);
+      await loadTree();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Item could not be deleted.");
+    }
+  }
+
+  function openMoveDialog() {
+    if (selected.type === "folder" && selectedFolder) {
+      setMoveDialog({ type: "folder", id: selectedFolder.id, name: selectedFolder.name });
+      setMoveDestination(selectedFolder.parent_folder_id === null ? "root" : String(selectedFolder.parent_folder_id));
+    }
+    if (selected.type === "file" && selectedFile) {
+      setMoveDialog({ type: "file", id: selectedFile.id, name: selectedFile.display_name });
+      setMoveDestination(selectedFile.folder_id === null ? "root" : String(selectedFile.folder_id));
+    }
+  }
+
+  async function confirmMove() {
+    if (!moveDialog) {
+      return;
+    }
+    const destination = moveDestination === "root" ? null : Number(moveDestination);
+    try {
+      if (moveDialog.type === "folder") {
+        await updateFolder(moveDialog.id, { parent_folder_id: destination });
+      } else {
+        await updateStoredFile(moveDialog.id, { folder_id: destination });
+      }
+      if (destination !== null) {
+        setExpandedFolders((current) => new Set([...current, destination]));
+      }
+      setMoveDialog(null);
+      setNotice("Move complete.");
+      await loadTree();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Item could not be moved.");
+    }
+  }
+
+  async function handleUpload(fileList: FileList | File[]) {
+    const files = Array.from(fileList);
+    if (files.length === 0) {
+      return;
+    }
+    setError("");
+    try {
+      const result = await uploadFiles(files, uploadTargetFolderId);
+      if (uploadTargetFolderId !== null) {
+        setExpandedFolders((current) => new Set([...current, uploadTargetFolderId]));
+      }
+      if (result.uploaded.length > 0) {
+        setSelected({ type: "file", id: result.uploaded[0].file.id });
+      }
+      const failed = result.failed.length > 0 ? ` ${result.failed.length} failed.` : "";
+      setNotice(`${result.uploaded.length} uploaded.${failed}`);
+      await loadTree();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Upload failed.");
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }
+
+  function renderFileRow(file: StoredFile, depth: number) {
+    const isSelected = selected.type === "file" && selected.id === file.id;
+    return (
+      <li key={`file-${file.id}`}>
+        <button
+          className={`tree-row tree-row--file ${isSelected ? "tree-row--selected" : ""}`}
+          data-tree-key={`file-${file.id}`}
+          onClick={() => selectFile(file.id)}
+          style={{ paddingLeft: `${depth * 18 + 38}px` }}
+          type="button"
+        >
+          <span className="tree-row__name">{file.display_name}</span>
+          <span className="tree-row__meta">{formatBytes(file.file_size)}</span>
+        </button>
+      </li>
+    );
+  }
+
+  function renderFolder(folder: FolderNode, depth: number) {
+    const isExpanded = expandedFolders.has(folder.id);
+    const isSelected = selected.type === "folder" && selected.id === folder.id;
+    return (
+      <li key={`folder-${folder.id}`}>
+        <div
+          className={`tree-row tree-row--folder ${isSelected ? "tree-row--selected" : ""}`}
+          data-tree-key={`folder-${folder.id}`}
+          style={{ paddingLeft: `${depth * 18 + 8}px` }}
+        >
+          <button
+            aria-label={isExpanded ? `Collapse ${folder.name}` : `Expand ${folder.name}`}
+            className="tree-toggle"
+            onClick={() => toggleFolder(folder.id)}
+            type="button"
+          >
+            {isExpanded ? "▾" : "▸"}
+          </button>
+          <button className="tree-name-button" onClick={() => selectFolder(folder.id)} type="button">
+            <span className="tree-row__name">{folder.name}</span>
+            <span className="tree-row__meta">{folder.folders.length + folder.files.length}</span>
+          </button>
+        </div>
+        {isExpanded ? (
+          <ul className="tree-list">
+            {folder.folders.map((child) => renderFolder(child, depth + 1))}
+            {folder.files.map((file) => renderFileRow(file, depth + 1))}
+          </ul>
+        ) : null}
+      </li>
+    );
+  }
+
+  const uploadTargetPath =
+    uploadTargetFolderId === null
+      ? "My Files"
+      : ["My Files", ...folderPath(tree.folders, uploadTargetFolderId).map((folder) => folder.name)].join(" > ");
 
   return (
     <main className="app-shell">
       <header className="top-bar">
         <div className="top-bar__inner">
           <h1>Personal Financial File Manager</h1>
+          <div className="top-actions">
+            <button onClick={handleCreateFolder} type="button">
+              New Folder
+            </button>
+            <button onClick={() => fileInputRef.current?.click()} type="button">
+              Upload
+            </button>
+          </div>
         </div>
       </header>
 
-      <section className="content" aria-label="Application status">
-        <div className="status-panel">
-          <div className="status-panel__header">
-            <div>
-              <h2>Application Status</h2>
-              <p>Live foundation check for the backend API and database connection.</p>
+      <section className="manager-toolbar" aria-label="File manager controls">
+        <div className="search-box">
+          <label htmlFor="file-search">Search</label>
+          <div className="search-input-wrap">
+            <input
+              aria-controls="file-search-results"
+              aria-expanded={isSearchOpen}
+              autoComplete="off"
+              id="file-search"
+              onChange={(event) => setSearch(event.target.value)}
+              onFocus={() => {
+                if (search.trim()) {
+                  setIsSearchOpen(true);
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setIsSearchOpen(false);
+                }
+              }}
+              placeholder="Find folders or files"
+              role="combobox"
+              value={search}
+            />
+            {search ? (
+              <button aria-label="Clear search" className="search-clear" onClick={clearSearch} type="button">
+                x
+              </button>
+            ) : null}
+          </div>
+          {isSearchOpen && search.trim() ? (
+            <div className="search-results" id="file-search-results" role="listbox">
+              {isSearchLoading ? <div className="search-state">Searching...</div> : null}
+              {!isSearchLoading && searchError ? <div className="search-state search-state--error">{searchError}</div> : null}
+              {!isSearchLoading && !searchError && searchResults.length === 0 ? (
+                <div className="search-state">No files or folders found.</div>
+              ) : null}
+              {!isSearchLoading && !searchError
+                ? searchResults.map((result) => (
+                    <button
+                      className="search-result-row"
+                      key={searchResultKey(result)}
+                      onClick={() => selectSearchResult(result)}
+                      role="option"
+                      type="button"
+                    >
+                      <span className="search-result-row__type">{result.type === "folder" ? "Folder" : "File"}</span>
+                      <span className="search-result-row__body">
+                        <span className="search-result-row__name">{result.name}</span>
+                        <span className="search-result-row__path">{formatLocation(result.parent_path)}</span>
+                      </span>
+                      {result.type === "file" && result.file_size !== null ? (
+                        <span className="search-result-row__meta">{formatBytes(result.file_size)}</span>
+                      ) : null}
+                    </button>
+                  ))
+                : null}
             </div>
-            <button className="retry-button" onClick={checkApplication} disabled={isChecking}>
-              Retry
+          ) : null}
+        </div>
+        <label>
+          <span>Sort</span>
+          <select onChange={(event) => setSortBy(event.target.value as SortBy)} value={sortBy}>
+            {sortOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Direction</span>
+          <select
+            onChange={(event) => setSortDirection(event.target.value as SortDirection)}
+            value={sortDirection}
+          >
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+        </label>
+        <button onClick={() => void loadTree()} type="button">
+          Refresh
+        </button>
+      </section>
+
+      <nav className="breadcrumbs" aria-label="Breadcrumbs">
+        <button onClick={selectRoot} type="button">
+          My Files
+        </button>
+        {breadcrumbs.map((folder) => (
+          <span key={folder.id}>
+            <span className="breadcrumb-separator">/</span>
+            <button onClick={() => selectFolder(folder.id)} type="button">
+              {folder.name}
+            </button>
+          </span>
+        ))}
+        {selectedFile ? (
+          <span>
+            <span className="breadcrumb-separator">/</span>
+            <button onClick={() => selectFile(selectedFile.id)} type="button">
+              {selectedFile.display_name}
+            </button>
+          </span>
+        ) : null}
+      </nav>
+
+      <section className="manager-layout" aria-label="File manager">
+        <aside className="tree-pane" aria-label="Folders and files">
+          <div className="pane-header">
+            <h2>My Files</h2>
+            <span>{isLoading ? "Loading" : `${tree.folders.length + tree.files.length} root items`}</span>
+          </div>
+          {error ? <p className="error-banner">{error}</p> : null}
+          <ul className="tree-list tree-list--root">
+            <li>
+              <div
+                className={`tree-row tree-row--folder ${selected.type === "root" ? "tree-row--selected" : ""}`}
+                data-tree-key="root"
+              >
+                <span className="tree-toggle" aria-hidden="true">
+                  ▾
+                </span>
+                <button className="tree-name-button" onClick={selectRoot} type="button">
+                  <span className="tree-row__name">My Files</span>
+                  <span className="tree-row__meta">{tree.folders.length + tree.files.length}</span>
+                </button>
+              </div>
+              <ul className="tree-list">
+                {tree.folders.map((folder) => renderFolder(folder, 1))}
+                {tree.files.map((file) => renderFileRow(file, 1))}
+              </ul>
+            </li>
+          </ul>
+        </aside>
+
+        <section className="details-pane" aria-label="Selected item details">
+          <div className="pane-header">
+            <div>
+              <h2>
+                {selectedFile?.display_name ?? selectedFolder?.name ?? "My Files"}
+              </h2>
+              <p>{selected.type === "file" ? "File" : "Folder"}</p>
+            </div>
+            <div className="detail-actions">
+              <button onClick={handleCreateFolder} type="button">
+                New Folder
+              </button>
+              <button onClick={() => fileInputRef.current?.click()} type="button">
+                Upload
+              </button>
+              {selected.type !== "root" ? (
+                <>
+                  <button onClick={handleRenameSelected} type="button">
+                    Rename
+                  </button>
+                  <button onClick={openMoveDialog} type="button">
+                    Move
+                  </button>
+                  <button className="danger-button" onClick={handleDeleteSelected} type="button">
+                    Delete
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </div>
+
+          <input
+            accept=".pdf,.jpg,.jpeg,.png,.csv,.xlsx,.txt"
+            multiple
+            onChange={(event) => {
+              if (event.target.files) {
+                void handleUpload(event.target.files);
+              }
+            }}
+            ref={fileInputRef}
+            type="file"
+          />
+
+          <div
+            className={`drop-zone ${isDragging ? "drop-zone--active" : ""}`}
+            onDragLeave={() => setIsDragging(false)}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setIsDragging(true);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              setIsDragging(false);
+              void handleUpload(event.dataTransfer.files);
+            }}
+          >
+            <strong>Drop files here</strong>
+            <span>Upload target: {uploadTargetPath}</span>
+            <button onClick={() => fileInputRef.current?.click()} type="button">
+              Browse Files
             </button>
           </div>
 
-          <div className="status-grid">
-            <div className="status-row">
-              <span className="status-row__label">Backend</span>
-              <StatusBadge state={status.backend} />
+          <p className={`notice ${error ? "notice--error" : ""}`}>{error || notice}</p>
+
+          {selectedFile ? (
+            <FileDetails file={selectedFile} locationPath={selectedLocationPath} />
+          ) : (
+            <FolderDetails
+              createdAt={selectedFolder?.created_at}
+              fileCount={selectedFolderContents.files}
+              folderCount={selectedFolderContents.folders}
+              modifiedAt={selectedFolder?.updated_at}
+              name={selectedFolder?.name ?? "My Files"}
+            />
+          )}
+        </section>
+      </section>
+
+      {nameDialog ? (
+        <div className="modal-backdrop" role="presentation">
+          <form aria-modal="true" className="move-dialog" onSubmit={submitNameDialog} role="dialog">
+            <h2>{nameDialog.title}</h2>
+            <label>
+              <span>{nameDialog.label}</span>
+              <input
+                autoFocus
+                onChange={(event) => setNameValue(event.target.value)}
+                value={nameValue}
+              />
+            </label>
+            <div className="modal-actions">
+              <button onClick={() => setNameDialog(null)} type="button">
+                Cancel
+              </button>
+              <button type="submit">Save</button>
             </div>
-            <div className="status-row">
-              <span className="status-row__label">Database</span>
-              <StatusBadge state={status.database} />
+          </form>
+        </div>
+      ) : null}
+
+      {confirmDialog ? (
+        <div className="modal-backdrop" role="presentation">
+          <div aria-modal="true" className="move-dialog" role="dialog">
+            <h2>Delete {confirmDialog.name}</h2>
+            <p>
+              {confirmDialog.type === "folder"
+                ? "This permanently removes the folder, nested folders, files, and stored file copies."
+                : "This permanently removes the file record and stored file copy."}
+            </p>
+            <div className="modal-actions">
+              <button onClick={() => setConfirmDialog(null)} type="button">
+                Cancel
+              </button>
+              <button className="danger-button" onClick={() => void confirmDelete()} type="button">
+                Delete
+              </button>
             </div>
           </div>
-
-          <p className={`status-message ${status.isError ? "status-message--error" : ""}`}>
-            {status.message}
-          </p>
         </div>
-      </section>
+      ) : null}
+
+      {moveDialog ? (
+        <div className="modal-backdrop" role="presentation">
+          <div aria-modal="true" className="move-dialog" role="dialog">
+            <h2>Move {moveDialog.name}</h2>
+            <label>
+              <span>Destination</span>
+              <select onChange={(event) => setMoveDestination(event.target.value)} value={moveDestination}>
+                <option value="root">My Files</option>
+                {allFolders
+                  .filter((folder) => !folderMoveExclusions.has(folder.id))
+                  .map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      {folder.label}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <div className="modal-actions">
+              <button onClick={() => setMoveDialog(null)} type="button">
+                Cancel
+              </button>
+              <button onClick={() => void confirmMove()} type="button">
+                Move
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
+}
+
+function FolderDetails({
+  createdAt,
+  fileCount,
+  folderCount,
+  modifiedAt,
+  name,
+}: {
+  createdAt?: string;
+  fileCount: number;
+  folderCount: number;
+  modifiedAt?: string;
+  name: string;
+}) {
+  return (
+    <div className="details-content">
+      <dl className="metadata-grid">
+        <div>
+          <dt>Name</dt>
+          <dd>{name}</dd>
+        </div>
+        <div>
+          <dt>Type</dt>
+          <dd>Folder</dd>
+        </div>
+        <div>
+          <dt>Created</dt>
+          <dd>{createdAt ? formatDate(createdAt) : "Root"}</dd>
+        </div>
+        <div>
+          <dt>Modified</dt>
+          <dd>{modifiedAt ? formatDate(modifiedAt) : "Root"}</dd>
+        </div>
+        <div>
+          <dt>Contents</dt>
+          <dd>
+            {folderCount} folders, {fileCount} files
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+type PreviewState =
+  | { status: "loading"; objectUrl?: undefined; message?: undefined }
+  | { status: "ready"; objectUrl: string; message?: undefined }
+  | { status: "error"; objectUrl?: undefined; message: string }
+  | { status: "unsupported"; objectUrl?: undefined; message?: undefined };
+
+function FileDetails({ file, locationPath }: { file: StoredFile; locationPath: string }) {
+  const isPdf = fileCanPreview(file) === "pdf";
+  const [statement, setStatement] = useState<StatementDetection | null>(null);
+  const [isStatementLoading, setIsStatementLoading] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [statementError, setStatementError] = useState("");
+  const [latestExtraction, setLatestExtraction] = useState<TransactionExtraction | null>(null);
+  const [transactions, setTransactions] = useState<StatementTransaction[]>([]);
+  const [isTransactionsLoading, setIsTransactionsLoading] = useState(false);
+  const [isExtractingTransactions, setIsExtractingTransactions] = useState(false);
+  const [isNormalizingTransactions, setIsNormalizingTransactions] = useState(false);
+  const [isClassifyingTransactionTypes, setIsClassifyingTransactionTypes] = useState(false);
+  const [isCategorizingTransactions, setIsCategorizingTransactions] = useState(false);
+  const [transactionError, setTransactionError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setStatement(null);
+    setStatementError("");
+
+    if (!isPdf) {
+      setIsStatementLoading(false);
+      return () => controller.abort();
+    }
+
+    setIsStatementLoading(true);
+    void getStatementForFile(file.id, controller.signal)
+      .then((response) => {
+        if (!controller.signal.aborted) {
+          setStatement(response.statement);
+        }
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) {
+          setStatementError(caught instanceof Error ? caught.message : "Statement information could not be loaded.");
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsStatementLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [file.id, isPdf]);
+
+  const refreshTransactions = useCallback(async (statementId: number) => {
+    const response = await getTransactionsForStatement(statementId);
+    setLatestExtraction(response.latest_extraction);
+    setTransactions(response.transactions);
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLatestExtraction(null);
+    setTransactions([]);
+    setTransactionError("");
+
+    if (!statement) {
+      setIsTransactionsLoading(false);
+      return () => controller.abort();
+    }
+
+    setIsTransactionsLoading(true);
+    void getTransactionsForStatement(statement.id, controller.signal)
+      .then((response) => {
+        if (!controller.signal.aborted) {
+          setLatestExtraction(response.latest_extraction);
+          setTransactions(response.transactions);
+        }
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) {
+          setTransactionError(caught instanceof Error ? caught.message : "Transactions could not be loaded.");
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsTransactionsLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [statement]);
+
+  async function handleAnalyzeStatement() {
+    setIsAnalyzing(true);
+    setStatementError("");
+    try {
+      const nextStatement = await detectStatement(file.id);
+      setStatement(nextStatement);
+    } catch (caught) {
+      setStatementError(caught instanceof Error ? caught.message : "Unable to analyze this file.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
+
+  async function handleSaveStatement(payload: StatementUpdate) {
+    setStatementError("");
+    const nextStatement = await updateStatementForFile(file.id, payload);
+    setStatement(nextStatement);
+  }
+
+  async function handleExtractTransactions() {
+    if (!statement) {
+      return;
+    }
+    setIsExtractingTransactions(true);
+    setTransactionError("");
+    try {
+      const response = await extractTransactions(statement.id);
+      setLatestExtraction(response.extraction);
+      setTransactions(response.transactions);
+    } catch (caught) {
+      setTransactionError(caught instanceof Error ? caught.message : "Unable to extract transactions.");
+    } finally {
+      setIsExtractingTransactions(false);
+    }
+  }
+
+  async function handleNormalizeTransactions() {
+    if (!statement) {
+      return;
+    }
+    setIsNormalizingTransactions(true);
+    setTransactionError("");
+    try {
+      const response = await normalizeTransactions(statement.id);
+      setTransactions(response.transactions);
+    } catch (caught) {
+      setTransactionError(caught instanceof Error ? caught.message : "Unable to normalize transactions.");
+    } finally {
+      setIsNormalizingTransactions(false);
+    }
+  }
+
+  async function handleClassifyTransactionTypes() {
+    if (!statement) {
+      return;
+    }
+    setIsClassifyingTransactionTypes(true);
+    setTransactionError("");
+    try {
+      const response = await classifyTransactionTypes(statement.id);
+      setTransactions(response.transactions);
+    } catch (caught) {
+      setTransactionError(caught instanceof Error ? caught.message : "Unable to classify transaction types.");
+    } finally {
+      setIsClassifyingTransactionTypes(false);
+    }
+  }
+
+  async function handleCategorizeTransactions() {
+    if (!statement) {
+      return;
+    }
+    setIsCategorizingTransactions(true);
+    setTransactionError("");
+    try {
+      const response = await categorizeTransactions(statement.id);
+      setTransactions(response.transactions);
+    } catch (caught) {
+      setTransactionError(caught instanceof Error ? caught.message : "Unable to categorize transactions.");
+    } finally {
+      setIsCategorizingTransactions(false);
+    }
+  }
+
+  async function handleCreateTransaction(payload: Required<TransactionPayload>) {
+    if (!statement) {
+      return;
+    }
+    setTransactionError("");
+    await createTransactionForStatement(statement.id, payload);
+    await refreshTransactions(statement.id);
+  }
+
+  async function handleUpdateTransaction(transactionId: number, payload: TransactionPayload) {
+    if (!statement) {
+      return;
+    }
+    setTransactionError("");
+    await updateTransaction(transactionId, payload);
+    await refreshTransactions(statement.id);
+  }
+
+  async function handleUpdateTransactionNormalization(
+    transactionId: number,
+    payload: TransactionNormalizationPayload,
+  ) {
+    if (!statement) {
+      return;
+    }
+    setTransactionError("");
+    await updateTransactionNormalization(transactionId, payload);
+    await refreshTransactions(statement.id);
+  }
+
+  async function handleUpdateTransactionType(transactionId: number, payload: TransactionTypePayload) {
+    if (!statement) {
+      return;
+    }
+    setTransactionError("");
+    await updateTransactionType(transactionId, payload);
+    await refreshTransactions(statement.id);
+  }
+
+  async function handleUpdateTransactionCategory(transactionId: number, payload: TransactionCategoryPayload) {
+    if (!statement) {
+      return;
+    }
+    setTransactionError("");
+    await updateTransactionCategory(transactionId, payload);
+    await refreshTransactions(statement.id);
+  }
+
+  async function handleUpdateTransactionInclusion(
+    transactionId: number,
+    payload: TransactionInclusionPayload,
+  ): Promise<StatementTransaction> {
+    setTransactionError("");
+    const transaction = await updateTransactionInclusion(transactionId, payload);
+    setTransactions((current) => replaceTransactionInList(current, transaction));
+    return transaction;
+  }
+
+  async function handleUpdateTransactionReview(
+    transactionId: number,
+    payload: TransactionReviewPayload,
+  ): Promise<StatementTransaction> {
+    setTransactionError("");
+    const transaction = await updateTransactionReview(transactionId, payload);
+    setTransactions((current) => replaceTransactionInList(current, transaction));
+    return transaction;
+  }
+
+  async function handleBulkUpdateTransactionTypes(payload: TransactionTypeBulkPayload): Promise<number[]> {
+    if (!statement) {
+      return [];
+    }
+    setTransactionError("");
+    const response = await bulkUpdateTransactionTypes(payload);
+    await refreshTransactions(statement.id);
+    return response.skipped_transaction_ids;
+  }
+
+  async function handleBulkUpdateTransactionCategories(payload: TransactionCategoryBulkPayload): Promise<number[]> {
+    if (!statement) {
+      return [];
+    }
+    setTransactionError("");
+    const response = await bulkUpdateTransactionCategories(payload);
+    await refreshTransactions(statement.id);
+    return response.skipped_transaction_ids;
+  }
+
+  async function handleBulkUpdateTransactionInclusion(payload: TransactionInclusionBulkPayload): Promise<number[]> {
+    setTransactionError("");
+    const response = await bulkUpdateTransactionInclusion(payload);
+    setTransactions((current) => mergeUpdatedTransactions(current, response.transactions));
+    return response.skipped_transaction_ids;
+  }
+
+  async function handleExcludeTransaction(transactionId: number) {
+    if (!statement) {
+      return;
+    }
+    setTransactionError("");
+    try {
+      await excludeTransaction(transactionId);
+      await refreshTransactions(statement.id);
+    } catch (caught) {
+      setTransactionError(caught instanceof Error ? caught.message : "Unable to exclude this transaction.");
+    }
+  }
+
+  return (
+    <div className="details-content">
+      <dl className="metadata-grid">
+        <div>
+          <dt>Filename</dt>
+          <dd>{file.display_name}</dd>
+        </div>
+        <div>
+          <dt>File Type</dt>
+          <dd>{file.mime_type}</dd>
+        </div>
+        <div>
+          <dt>File Size</dt>
+          <dd>{formatBytes(file.file_size)}</dd>
+        </div>
+        <div>
+          <dt>Location</dt>
+          <dd>{locationPath}</dd>
+        </div>
+        <div>
+          <dt>Uploaded</dt>
+          <dd>{formatDate(file.created_at)}</dd>
+        </div>
+        <div>
+          <dt>Modified</dt>
+          <dd>{formatDate(file.updated_at)}</dd>
+        </div>
+      </dl>
+
+      <div className="preview-header">
+        <h3>Preview</h3>
+        <a className="download-link" href={fileDownloadUrl(file.id)}>
+          Download
+        </a>
+      </div>
+
+      <PreviewPane file={file} />
+      {isPdf || statement ? (
+        <StatementPanel
+          error={statementError}
+          isAnalyzing={isAnalyzing}
+          isLoading={isStatementLoading}
+          onAnalyze={handleAnalyzeStatement}
+          onSave={handleSaveStatement}
+          statement={statement}
+        />
+      ) : null}
+      {statement ? (
+        <TransactionPanel
+          error={transactionError}
+          isCategorizing={isCategorizingTransactions}
+          isClassifyingTypes={isClassifyingTransactionTypes}
+          isExtracting={isExtractingTransactions}
+          isLoading={isTransactionsLoading}
+          isNormalizing={isNormalizingTransactions}
+          latestExtraction={latestExtraction}
+          onAdd={handleCreateTransaction}
+          onBulkEditTypes={handleBulkUpdateTransactionTypes}
+          onBulkEditCategories={handleBulkUpdateTransactionCategories}
+          onCategorize={handleCategorizeTransactions}
+          onClassifyTypes={handleClassifyTransactionTypes}
+          onEdit={handleUpdateTransaction}
+          onEditNormalization={handleUpdateTransactionNormalization}
+          onEditCategory={handleUpdateTransactionCategory}
+          onEditInclusion={handleUpdateTransactionInclusion}
+          onEditReview={handleUpdateTransactionReview}
+          onEditType={handleUpdateTransactionType}
+          onExclude={handleExcludeTransaction}
+          onExtract={handleExtractTransactions}
+          onBulkEditInclusion={handleBulkUpdateTransactionInclusion}
+          onNormalize={handleNormalizeTransactions}
+          onTransactionsUpdate={(updater) => setTransactions((current) => updater(current))}
+          transactions={transactions}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function StatementPanel({
+  error,
+  isAnalyzing,
+  isLoading,
+  onAnalyze,
+  onSave,
+  statement,
+}: {
+  error: string;
+  isAnalyzing: boolean;
+  isLoading: boolean;
+  onAnalyze: () => void;
+  onSave: (payload: StatementUpdate) => Promise<void>;
+  statement: StatementDetection | null;
+}) {
+  const [editValues, setEditValues] = useState<StatementEditValues | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const buttonText = statement ? "Re-analyze" : "Analyze File";
+  const statusText = statement ? labelFor(detectionStatusLabels, statement.detection_status) : "Not Analyzed";
+  const subtitle = statement?.metadata_source === "USER_EDITED" ? `${statusText} - User edited` : statusText;
+  const isBusy = isAnalyzing || isLoading || isSaving;
+
+  useEffect(() => {
+    if (!statement) {
+      setIsEditing(false);
+      setEditValues(null);
+      setEditError("");
+      return;
+    }
+    if (!isEditing) {
+      setEditValues(statementToEditValues(statement));
+    }
+  }, [statement, isEditing]);
+
+  function updateEditValue(field: keyof StatementEditValues, value: string) {
+    setEditValues((current) => (current ? { ...current, [field]: value } : current));
+  }
+
+  function startEditing() {
+    if (!statement) {
+      return;
+    }
+    setEditValues(statementToEditValues(statement));
+    setEditError("");
+    setIsEditing(true);
+  }
+
+  function cancelEditing() {
+    setEditValues(statement ? statementToEditValues(statement) : null);
+    setEditError("");
+    setIsEditing(false);
+  }
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editValues) {
+      return;
+    }
+
+    const validationMessage = validateStatementEdit(editValues);
+    if (validationMessage) {
+      setEditError(validationMessage);
+      return;
+    }
+
+    setIsSaving(true);
+    setEditError("");
+    try {
+      await onSave(statementPayloadFromValues(editValues));
+      setIsEditing(false);
+    } catch (caught) {
+      setEditError(caught instanceof Error ? caught.message : "Statement details could not be saved.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function correctionNote(
+    currentValue: string | null,
+    detectedValue: string | null,
+    formatter: (value: string | null) => string,
+  ) {
+    if (!statement?.user_corrected || currentValue === detectedValue) {
+      return null;
+    }
+    return (
+      <span className="statement-correction-note">User corrected from {formatter(detectedValue)}</span>
+    );
+  }
+
+  function periodCorrectionNote() {
+    if (!statement?.user_corrected) {
+      return null;
+    }
+    const currentKey = `${statement.statement_start_date ?? ""}|${statement.statement_end_date ?? ""}`;
+    const detectedKey = `${statement.detected_statement_start_date ?? ""}|${statement.detected_statement_end_date ?? ""}`;
+    if (currentKey === detectedKey) {
+      return null;
+    }
+    return (
+      <span className="statement-correction-note">
+        User corrected from {formatDateRange(statement.detected_statement_start_date, statement.detected_statement_end_date)}
+      </span>
+    );
+  }
+
+  const formatDocumentType = (value: string | null) => (value ? labelFor(documentTypeLabels, value) : "Unknown");
+  const formatInstitution = (value: string | null) => (value ? labelFor(institutionLabels, value) : "Unknown");
+  const formatAccountType = (value: string | null) => (value ? labelFor(accountTypeLabels, value) : "Unknown");
+  const formatLastFour = (value: string | null) => (value ? `ending in ${value}` : "Unknown");
+  const formatProduct = (value: string | null) => value || "Not set";
+
+  return (
+    <section className="statement-panel" aria-label="Statement information">
+      <div className="statement-panel__header">
+        <div>
+          <h3>{isEditing ? "Edit Statement Details" : "Statement Information"}</h3>
+          <p>{subtitle}</p>
+        </div>
+        <div className="statement-actions">
+          {statement && !isEditing ? (
+            <button disabled={isBusy} onClick={startEditing} type="button">
+              Edit Details
+            </button>
+          ) : null}
+          <button disabled={isBusy} onClick={onAnalyze} type="button">
+            {isAnalyzing ? "Analyzing..." : buttonText}
+          </button>
+        </div>
+      </div>
+
+      {isLoading ? <div className="statement-state">Loading statement information...</div> : null}
+      {isAnalyzing ? <div className="statement-state">Analyzing document...</div> : null}
+      {error ? <div className="statement-state statement-state--error">{error}</div> : null}
+      {editError ? <div className="statement-state statement-state--error">{editError}</div> : null}
+
+      {!isLoading && !statement && !error ? (
+        <div className="statement-state">No statement analysis yet.</div>
+      ) : null}
+
+      {statement && isEditing && editValues ? (
+        <form className="statement-edit-form" onSubmit={(event) => void handleSave(event)}>
+          <label>
+            <span>Document Type</span>
+            <select
+              value={editValues.document_type}
+              onChange={(event) => updateEditValue("document_type", event.target.value)}
+            >
+              {documentTypeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Institution</span>
+            <select
+              value={editValues.institution}
+              onChange={(event) => updateEditValue("institution", event.target.value)}
+            >
+              {institutionOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Product Name</span>
+            <input
+              maxLength={255}
+              type="text"
+              value={editValues.product_name}
+              onChange={(event) => updateEditValue("product_name", event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Account Type</span>
+            <select
+              value={editValues.account_type}
+              onChange={(event) => updateEditValue("account_type", event.target.value)}
+            >
+              {accountTypeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Account Last Four</span>
+            <input
+              inputMode="numeric"
+              maxLength={4}
+              pattern="[0-9]{0,4}"
+              type="text"
+              value={editValues.account_last_four}
+              onChange={(event) => updateEditValue("account_last_four", event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Statement Start</span>
+            <input
+              type="date"
+              value={editValues.statement_start_date}
+              onChange={(event) => updateEditValue("statement_start_date", event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Statement End</span>
+            <input
+              type="date"
+              value={editValues.statement_end_date}
+              onChange={(event) => updateEditValue("statement_end_date", event.target.value)}
+            />
+          </label>
+          <div className="statement-edit-form__actions">
+            <button disabled={isSaving} onClick={cancelEditing} type="button">
+              Cancel
+            </button>
+            <button disabled={isSaving} type="submit">
+              {isSaving ? "Saving..." : "Save Changes"}
+            </button>
+          </div>
+        </form>
+      ) : null}
+
+      {statement && !isEditing ? (
+        <dl className="statement-grid">
+          <div>
+            <dt>Document Type</dt>
+            <dd>
+              {formatDocumentType(statement.document_type)}
+              {correctionNote(statement.document_type, statement.detected_document_type, formatDocumentType)}
+            </dd>
+          </div>
+          <div>
+            <dt>Institution</dt>
+            <dd>
+              {formatInstitution(statement.institution)}
+              {correctionNote(statement.institution, statement.detected_institution, formatInstitution)}
+            </dd>
+          </div>
+          {statement.product_name || statement.detected_product_name ? (
+            <div>
+              <dt>Product</dt>
+              <dd>
+                {formatProduct(statement.product_name)}
+                {correctionNote(statement.product_name, statement.detected_product_name, formatProduct)}
+              </dd>
+            </div>
+          ) : null}
+          <div>
+            <dt>Account Type</dt>
+            <dd>
+              {formatAccountType(statement.account_type)}
+              {correctionNote(statement.account_type, statement.detected_account_type, formatAccountType)}
+            </dd>
+          </div>
+          <div>
+            <dt>Account</dt>
+            <dd>
+              {statement.account_last_four ? `Ending in ${statement.account_last_four}` : "Unknown"}
+              {correctionNote(statement.account_last_four, statement.detected_account_last_four, formatLastFour)}
+            </dd>
+          </div>
+          <div>
+            <dt>Statement Period</dt>
+            <dd>
+              {formatDateRange(statement.statement_start_date, statement.statement_end_date)}
+              {periodCorrectionNote()}
+            </dd>
+          </div>
+          <div>
+            <dt>Detection Confidence</dt>
+            <dd>{formatConfidence(statement.detection_confidence)}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{labelFor(detectionStatusLabels, statement.detection_status)}</dd>
+          </div>
+          {statement.detection_reason ? (
+            <div className="statement-grid__wide">
+              <dt>Reason</dt>
+              <dd>{statement.detection_reason}</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+    </section>
+  );
+}
+
+function TransactionPanel({
+  error,
+  isCategorizing,
+  isClassifyingTypes,
+  isExtracting,
+  isLoading,
+  isNormalizing,
+  latestExtraction,
+  onAdd,
+  onBulkEditCategories,
+  onBulkEditInclusion,
+  onBulkEditTypes,
+  onCategorize,
+  onClassifyTypes,
+  onEdit,
+  onEditCategory,
+  onEditInclusion,
+  onEditNormalization,
+  onEditReview,
+  onEditType,
+  onExclude,
+  onExtract,
+  onNormalize,
+  onTransactionsUpdate,
+  transactions,
+}: {
+  error: string;
+  isCategorizing: boolean;
+  isClassifyingTypes: boolean;
+  isExtracting: boolean;
+  isLoading: boolean;
+  isNormalizing: boolean;
+  latestExtraction: TransactionExtraction | null;
+  onAdd: (payload: Required<TransactionPayload>) => Promise<void>;
+  onBulkEditCategories: (payload: TransactionCategoryBulkPayload) => Promise<number[]>;
+  onBulkEditInclusion: (payload: TransactionInclusionBulkPayload) => Promise<number[]>;
+  onBulkEditTypes: (payload: TransactionTypeBulkPayload) => Promise<number[]>;
+  onCategorize: () => void;
+  onClassifyTypes: () => void;
+  onEdit: (transactionId: number, payload: TransactionPayload) => Promise<void>;
+  onEditCategory: (transactionId: number, payload: TransactionCategoryPayload) => Promise<void>;
+  onEditInclusion: (transactionId: number, payload: TransactionInclusionPayload) => Promise<StatementTransaction>;
+  onEditNormalization: (transactionId: number, payload: TransactionNormalizationPayload) => Promise<void>;
+  onEditReview: (transactionId: number, payload: TransactionReviewPayload) => Promise<StatementTransaction>;
+  onEditType: (transactionId: number, payload: TransactionTypePayload) => Promise<void>;
+  onExclude: (transactionId: number) => Promise<void>;
+  onExtract: () => void;
+  onNormalize: () => void;
+  onTransactionsUpdate: (updater: (current: StatementTransaction[]) => StatementTransaction[]) => void;
+  transactions: StatementTransaction[];
+}) {
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("source_order");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [dialogState, setDialogState] = useState<TransactionDialogState>(null);
+  const [formValues, setFormValues] = useState<TransactionFormValues>(emptyTransactionFormValues);
+  const [formError, setFormError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [normalizationDialogState, setNormalizationDialogState] = useState<NormalizationDialogState>(null);
+  const [normalizationFormValues, setNormalizationFormValues] = useState<NormalizationFormValues>({
+    normalized_name: "",
+    use_for_future: false,
+  });
+  const [normalizationFormError, setNormalizationFormError] = useState("");
+  const [isSavingNormalization, setIsSavingNormalization] = useState(false);
+  const [normalizationFilter, setNormalizationFilter] = useState<NormalizationFilter>("all");
+  const [typeDialogState, setTypeDialogState] = useState<TypeDialogState>(null);
+  const [typeFormValues, setTypeFormValues] = useState<TypeFormValues>({
+    transaction_type: "UNKNOWN",
+    use_for_future: false,
+  });
+  const [typeFormError, setTypeFormError] = useState("");
+  const [isSavingType, setIsSavingType] = useState(false);
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [categoryDialogState, setCategoryDialogState] = useState<CategoryDialogState>(null);
+  const [categoryFormValues, setCategoryFormValues] = useState<CategoryFormValues>({
+    main_category: "PERSONAL_INTERNAL",
+    subcategory: "UNCATEGORIZED",
+    use_for_future: false,
+  });
+  const [categoryFormError, setCategoryFormError] = useState("");
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [inclusionFilter, setInclusionFilter] = useState<InclusionFilter>("all");
+  const [selectedTransactionIds, setSelectedTransactionIds] = useState<Set<number>>(new Set());
+  const [bulkTypeFormValues, setBulkTypeFormValues] = useState<BulkTypeFormValues>({
+    transaction_type: "EXPENSE",
+    overwrite_user_edits: false,
+  });
+  const [bulkCategoryFormValues, setBulkCategoryFormValues] = useState<BulkCategoryFormValues>({
+    main_category: "PERSONAL_INTERNAL",
+    subcategory: "UNCATEGORIZED",
+    overwrite_user_edits: false,
+  });
+  const [bulkTypeError, setBulkTypeError] = useState("");
+  const [bulkTypeNotice, setBulkTypeNotice] = useState("");
+  const [bulkCategoryError, setBulkCategoryError] = useState("");
+  const [bulkCategoryNotice, setBulkCategoryNotice] = useState("");
+  const [isSavingBulkType, setIsSavingBulkType] = useState(false);
+  const [isSavingBulkCategory, setIsSavingBulkCategory] = useState(false);
+  const [isSavingBulkInclusion, setIsSavingBulkInclusion] = useState(false);
+  const [inclusionError, setInclusionError] = useState("");
+  const [inclusionNotice, setInclusionNotice] = useState("");
+  const [savingInclusionIds, setSavingInclusionIds] = useState<Set<number>>(new Set());
+  const [savingReviewIds, setSavingReviewIds] = useState<Set<number>>(new Set());
+  const [transactionSearch, setTransactionSearch] = useState("");
+  const bulkHeaderCheckboxRef = useRef<HTMLInputElement>(null);
+  const inclusionHeaderCheckboxRef = useRef<HTMLInputElement>(null);
+  const inclusionRequestVersions = useRef<Map<number, number>>(new Map());
+  const reviewCount = transactions.filter((transaction) => transaction.needs_review).length;
+  const normalizationReviewCount = transactions.filter(
+    (transaction) => transactionNormalizationStatus(transaction) === "NEEDS_REVIEW",
+  ).length;
+  const typeReviewCount = transactions.filter(transactionNeedsTypeReview).length;
+  const categoryReviewCount = transactions.filter(categoryNeedsReview).length;
+  const phase8ReviewCount = transactions.filter(transactionNeedsPhase8Review).length;
+  const includedCount = transactions.filter(transactionIncluded).length;
+  const excludedFromSummaryCount = transactions.length - includedCount;
+  const selectedTotalCents = selectedAmountCents(transactions);
+  const hasExtraction = latestExtraction !== null;
+  const extractButtonText = hasExtraction ? "Re-extract Transactions" : "Extract Transactions";
+  const hasNormalization = transactions.some(
+    (transaction) =>
+      transaction.normalized_name ||
+      transaction.normalized_at ||
+      transactionNormalizationStatus(transaction) !== "NOT_NORMALIZED",
+  );
+  const normalizeButtonText = hasNormalization ? "Re-normalize" : "Normalize Transactions";
+  const hasTypeClassification = transactions.some(
+    (transaction) =>
+      transaction.type_updated_at ||
+      transactionTypeStatus(transaction) !== "NOT_CLASSIFIED" ||
+      transactionTypeValue(transaction) !== "UNKNOWN",
+  );
+  const classifyButtonText = hasTypeClassification ? "Reclassify Types" : "Classify Types";
+  const hasCategorization = transactions.some(
+    (transaction) =>
+      transaction.category_updated_at ||
+      categoryStatus(transaction) !== "NOT_CATEGORIZED" ||
+      transaction.main_category ||
+      transaction.subcategory,
+  );
+  const categorizeButtonText = hasCategorization ? "Re-categorize" : "Categorize Transactions";
+  const isActionBusy = isExtracting || isLoading || isNormalizing || isClassifyingTypes || isCategorizing;
+  const selectedIds = useMemo(() => Array.from(selectedTransactionIds), [selectedTransactionIds]);
+  const visibleTransactions = useMemo(() => {
+    return transactions.filter(
+      (transaction) =>
+        transactionMatchesNormalizationFilter(transaction, normalizationFilter) &&
+        transactionMatchesTypeFilter(transaction, typeFilter) &&
+        transactionMatchesCategoryFilter(transaction, categoryFilter) &&
+        transactionMatchesInclusionFilter(transaction, inclusionFilter) &&
+        transactionMatchesSearch(transaction, transactionSearch),
+    );
+  }, [categoryFilter, inclusionFilter, normalizationFilter, transactionSearch, transactions, typeFilter]);
+  const sortedTransactions = useMemo(() => {
+    return [...visibleTransactions].sort((left, right) => {
+      const multiplier = sortDirection === "asc" ? 1 : -1;
+      if (sortBy === "normalized_name") {
+        const leftName = left.normalized_name ?? "";
+        const rightName = right.normalized_name ?? "";
+        return (leftName.localeCompare(rightName) || left.id - right.id) * multiplier;
+      }
+      if (sortBy === "transaction_type") {
+        const leftType = labelFor(transactionTypeLabels, transactionTypeValue(left));
+        const rightType = labelFor(transactionTypeLabels, transactionTypeValue(right));
+        return (leftType.localeCompare(rightType) || left.id - right.id) * multiplier;
+      }
+      if (sortBy === "main_category") {
+        return (categoryPairLabel(left).localeCompare(categoryPairLabel(right)) || left.id - right.id) * multiplier;
+      }
+      if (sortBy === "subcategory") {
+        const leftSubcategory = labelFor(subcategoryLabels, categorySubcategoryValue(left));
+        const rightSubcategory = labelFor(subcategoryLabels, categorySubcategoryValue(right));
+        return (leftSubcategory.localeCompare(rightSubcategory) || left.id - right.id) * multiplier;
+      }
+      if (sortBy === "transaction_date") {
+        return left.transaction_date.localeCompare(right.transaction_date) * multiplier;
+      }
+      if (sortBy === "amount") {
+        return (Number(left.amount) - Number(right.amount)) * multiplier;
+      }
+      return (left.source_order - right.source_order || left.id - right.id) * multiplier;
+    });
+  }, [sortBy, sortDirection, visibleTransactions]);
+  const visibleTransactionIds = useMemo(
+    () => sortedTransactions.map((transaction) => transaction.id),
+    [sortedTransactions],
+  );
+  const allVisibleBulkSelected =
+    visibleTransactionIds.length > 0 && visibleTransactionIds.every((transactionId) => selectedTransactionIds.has(transactionId));
+  const visibleIncludedCount = sortedTransactions.filter(transactionIncluded).length;
+  const allVisibleIncluded = sortedTransactions.length > 0 && visibleIncludedCount === sortedTransactions.length;
+  const someVisibleIncluded = visibleIncludedCount > 0 && visibleIncludedCount < sortedTransactions.length;
+
+  useEffect(() => {
+    if (bulkHeaderCheckboxRef.current) {
+      bulkHeaderCheckboxRef.current.indeterminate =
+        visibleTransactionIds.some((transactionId) => selectedTransactionIds.has(transactionId)) && !allVisibleBulkSelected;
+    }
+  }, [allVisibleBulkSelected, selectedTransactionIds, visibleTransactionIds]);
+
+  useEffect(() => {
+    if (inclusionHeaderCheckboxRef.current) {
+      inclusionHeaderCheckboxRef.current.indeterminate = someVisibleIncluded;
+    }
+  }, [someVisibleIncluded]);
+
+  useEffect(() => {
+    setSelectedTransactionIds((current) => {
+      const availableIds = new Set(transactions.map((transaction) => transaction.id));
+      const next = new Set([...current].filter((transactionId) => availableIds.has(transactionId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [transactions]);
+
+  function openAddDialog() {
+    setDialogState({ mode: "add" });
+    setFormValues(emptyTransactionFormValues());
+    setFormError("");
+  }
+
+  function openEditDialog(transaction: StatementTransaction) {
+    setDialogState({ mode: "edit", transaction });
+    setFormValues(transactionToFormValues(transaction));
+    setFormError("");
+  }
+
+  function closeDialog() {
+    setDialogState(null);
+    setFormValues(emptyTransactionFormValues());
+    setFormError("");
+  }
+
+  function openNormalizationDialog(transaction: StatementTransaction) {
+    setNormalizationDialogState({ transaction });
+    setNormalizationFormValues(normalizationToFormValues(transaction));
+    setNormalizationFormError("");
+  }
+
+  function closeNormalizationDialog() {
+    setNormalizationDialogState(null);
+    setNormalizationFormValues({ normalized_name: "", use_for_future: false });
+    setNormalizationFormError("");
+  }
+
+  function openTypeDialog(transaction: StatementTransaction) {
+    setTypeDialogState({ transaction });
+    setTypeFormValues(typeToFormValues(transaction));
+    setTypeFormError("");
+  }
+
+  function closeTypeDialog() {
+    setTypeDialogState(null);
+    setTypeFormValues({ transaction_type: "UNKNOWN", use_for_future: false });
+    setTypeFormError("");
+  }
+
+  function openCategoryDialog(transaction: StatementTransaction) {
+    setCategoryDialogState({ transaction });
+    setCategoryFormValues(categoryToFormValues(transaction));
+    setCategoryFormError("");
+  }
+
+  function closeCategoryDialog() {
+    setCategoryDialogState(null);
+    setCategoryFormValues({
+      main_category: "PERSONAL_INTERNAL",
+      subcategory: "UNCATEGORIZED",
+      use_for_future: false,
+    });
+    setCategoryFormError("");
+  }
+
+  function updateFormValue(field: keyof TransactionFormValues, value: string) {
+    setFormValues((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateNormalizationFormValue(field: "normalized_name", value: string): void;
+  function updateNormalizationFormValue(field: "use_for_future", value: boolean): void;
+  function updateNormalizationFormValue(field: keyof NormalizationFormValues, value: string | boolean) {
+    if (field === "normalized_name" && typeof value === "string") {
+      setNormalizationFormValues((current) => ({ ...current, normalized_name: value }));
+    }
+    if (field === "use_for_future" && typeof value === "boolean") {
+      setNormalizationFormValues((current) => ({ ...current, use_for_future: value }));
+    }
+  }
+
+  function updateTypeFormValue(field: "transaction_type", value: TransactionTypeValue): void;
+  function updateTypeFormValue(field: "use_for_future", value: boolean): void;
+  function updateTypeFormValue(field: keyof TypeFormValues, value: TransactionTypeValue | boolean) {
+    if (field === "transaction_type" && typeof value === "string") {
+      setTypeFormValues((current) => ({ ...current, transaction_type: value }));
+    }
+    if (field === "use_for_future" && typeof value === "boolean") {
+      setTypeFormValues((current) => ({ ...current, use_for_future: value }));
+    }
+  }
+
+  function updateBulkTypeFormValue(field: "transaction_type", value: TransactionTypeValue): void;
+  function updateBulkTypeFormValue(field: "overwrite_user_edits", value: boolean): void;
+  function updateBulkTypeFormValue(field: keyof BulkTypeFormValues, value: TransactionTypeValue | boolean) {
+    if (field === "transaction_type" && typeof value === "string") {
+      setBulkTypeFormValues((current) => ({ ...current, transaction_type: value }));
+    }
+    if (field === "overwrite_user_edits" && typeof value === "boolean") {
+      setBulkTypeFormValues((current) => ({ ...current, overwrite_user_edits: value }));
+    }
+  }
+
+  function updateCategoryFormValue(field: "main_category", value: CategoryMainValue): void;
+  function updateCategoryFormValue(field: "subcategory", value: CategorySubcategoryValue): void;
+  function updateCategoryFormValue(field: "use_for_future", value: boolean): void;
+  function updateCategoryFormValue(field: keyof CategoryFormValues, value: CategoryMainValue | CategorySubcategoryValue | boolean) {
+    if (field === "main_category" && typeof value === "string" && isCategoryMainValue(value)) {
+      setCategoryFormValues((current) => ({
+        ...current,
+        main_category: value,
+        subcategory: defaultSubcategoryFor(value),
+      }));
+    }
+    if (field === "subcategory" && typeof value === "string" && isCategorySubcategoryValue(value)) {
+      setCategoryFormValues((current) => ({ ...current, subcategory: value }));
+    }
+    if (field === "use_for_future" && typeof value === "boolean") {
+      setCategoryFormValues((current) => ({ ...current, use_for_future: value }));
+    }
+  }
+
+  function updateBulkCategoryFormValue(field: "main_category", value: CategoryMainValue): void;
+  function updateBulkCategoryFormValue(field: "subcategory", value: CategorySubcategoryValue): void;
+  function updateBulkCategoryFormValue(field: "overwrite_user_edits", value: boolean): void;
+  function updateBulkCategoryFormValue(
+    field: keyof BulkCategoryFormValues,
+    value: CategoryMainValue | CategorySubcategoryValue | boolean,
+  ) {
+    if (field === "main_category" && typeof value === "string" && isCategoryMainValue(value)) {
+      setBulkCategoryFormValues((current) => ({
+        ...current,
+        main_category: value,
+        subcategory: defaultSubcategoryFor(value),
+      }));
+    }
+    if (field === "subcategory" && typeof value === "string" && isCategorySubcategoryValue(value)) {
+      setBulkCategoryFormValues((current) => ({ ...current, subcategory: value }));
+    }
+    if (field === "overwrite_user_edits" && typeof value === "boolean") {
+      setBulkCategoryFormValues((current) => ({ ...current, overwrite_user_edits: value }));
+    }
+  }
+
+  function toggleTransactionSelection(transactionId: number, checked: boolean) {
+    setSelectedTransactionIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(transactionId);
+      } else {
+        next.delete(transactionId);
+      }
+      return next;
+    });
+    setBulkTypeError("");
+    setBulkTypeNotice("");
+    setBulkCategoryError("");
+    setBulkCategoryNotice("");
+  }
+
+  async function handleToggleExpenseInclusion(transaction: StatementTransaction, checked: boolean) {
+    const previousTransaction = transaction;
+    const nextVersion = (inclusionRequestVersions.current.get(transaction.id) ?? 0) + 1;
+    inclusionRequestVersions.current.set(transaction.id, nextVersion);
+    setInclusionError("");
+    setInclusionNotice("");
+    setSavingInclusionIds((current) => new Set(current).add(transaction.id));
+    setTransactionsOptimistic(transaction.id, {
+      include_in_expenses: checked,
+      inclusion_initialized: true,
+      inclusion_source: checked ? "USER_SELECTED" : "USER_EXCLUDED",
+      inclusion_updated_at: new Date().toISOString(),
+    });
+
+    try {
+      const saved = await onEditInclusion(transaction.id, { include_in_expenses: checked });
+      if (inclusionRequestVersions.current.get(transaction.id) === nextVersion) {
+        setTransactionsOptimistic(transaction.id, saved);
+      }
+    } catch (caught) {
+      if (inclusionRequestVersions.current.get(transaction.id) === nextVersion) {
+        setTransactionsOptimistic(transaction.id, previousTransaction);
+        setInclusionError(caught instanceof Error ? caught.message : "Could not save transaction selection.");
+      }
+    } finally {
+      if (inclusionRequestVersions.current.get(transaction.id) === nextVersion) {
+        setSavingInclusionIds((current) => {
+          const next = new Set(current);
+          next.delete(transaction.id);
+          return next;
+        });
+      }
+    }
+  }
+
+  function setTransactionsOptimistic(
+    transactionId: number,
+    patch: Partial<StatementTransaction> | StatementTransaction,
+  ) {
+    const updatedTransaction = patch as StatementTransaction;
+    if ("id" in updatedTransaction && updatedTransaction.id === transactionId && "transaction_detail" in updatedTransaction) {
+      onTransactionsUpdate((current) => replaceTransactionInList(current, updatedTransaction));
+      return;
+    }
+    onTransactionsUpdate((current) =>
+      current.map((transaction) =>
+        transaction.id === transactionId ? { ...transaction, ...patch } : transaction,
+      ),
+    );
+  }
+
+  async function handleBulkInclusion(transactionIds: number[], include: boolean, scopeLabel: string) {
+    if (transactionIds.length === 0) {
+      setInclusionError("No transactions match this action.");
+      setInclusionNotice("");
+      return;
+    }
+    setIsSavingBulkInclusion(true);
+    setInclusionError("");
+    setInclusionNotice("");
+    try {
+      const skippedIds = await onBulkEditInclusion({
+        transaction_ids: transactionIds,
+        include_in_expenses: include,
+      });
+      const changedCount = transactionIds.length - skippedIds.length;
+      setInclusionNotice(
+        `${include ? "Included" : "Excluded"} ${changedCount} ${scopeLabel} transaction${changedCount === 1 ? "" : "s"}.`,
+      );
+    } catch (caught) {
+      setInclusionError(caught instanceof Error ? caught.message : "Could not save transaction selections.");
+    } finally {
+      setIsSavingBulkInclusion(false);
+    }
+  }
+
+  function handleAllTransactionsInclusion(include: boolean) {
+    const action = include ? "Select" : "Deselect";
+    const confirmed = window.confirm(
+      `${action} all ${transactions.length} transactions?\n\nThis will replace your current transaction selections.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    void handleBulkInclusion(transactions.map((transaction) => transaction.id), include, "total");
+  }
+
+  async function handleMarkReviewed(transaction: StatementTransaction) {
+    setInclusionError("");
+    setInclusionNotice("");
+    setSavingReviewIds((current) => new Set(current).add(transaction.id));
+    try {
+      await onEditReview(transaction.id, { review_status: "REVIEWED" });
+    } catch (caught) {
+      setInclusionError(caught instanceof Error ? caught.message : "Could not save review status.");
+    } finally {
+      setSavingReviewIds((current) => {
+        const next = new Set(current);
+        next.delete(transaction.id);
+        return next;
+      });
+    }
+  }
+
+  function toggleVisibleTransactions(checked: boolean) {
+    setSelectedTransactionIds((current) => {
+      const next = new Set(current);
+      visibleTransactionIds.forEach((transactionId) => {
+        if (checked) {
+          next.add(transactionId);
+        } else {
+          next.delete(transactionId);
+        }
+      });
+      return next;
+    });
+    setBulkTypeError("");
+    setBulkTypeNotice("");
+    setBulkCategoryError("");
+    setBulkCategoryNotice("");
+  }
+
+  async function handleSubmitTransaction(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const validationMessage = validateTransactionForm(formValues);
+    if (validationMessage) {
+      setFormError(validationMessage);
+      return;
+    }
+
+    setIsSaving(true);
+    setFormError("");
+    try {
+      const payload = transactionPayloadFromValues(formValues);
+      if (dialogState?.mode === "edit") {
+        await onEdit(dialogState.transaction.id, payload);
+      } else {
+        await onAdd(payload);
+      }
+      closeDialog();
+    } catch (caught) {
+      setFormError(caught instanceof Error ? caught.message : "Transaction could not be saved.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleSubmitNormalization(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!normalizationDialogState) {
+      return;
+    }
+
+    const validationMessage = validateNormalizationForm(normalizationFormValues);
+    if (validationMessage) {
+      setNormalizationFormError(validationMessage);
+      return;
+    }
+
+    setIsSavingNormalization(true);
+    setNormalizationFormError("");
+    try {
+      await onEditNormalization(
+        normalizationDialogState.transaction.id,
+        normalizationPayloadFromValues(normalizationFormValues),
+      );
+      closeNormalizationDialog();
+    } catch (caught) {
+      setNormalizationFormError(caught instanceof Error ? caught.message : "Name could not be saved.");
+    } finally {
+      setIsSavingNormalization(false);
+    }
+  }
+
+  async function handleSubmitType(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!typeDialogState) {
+      return;
+    }
+
+    const validationMessage = validateTypeForm(typeFormValues);
+    if (validationMessage) {
+      setTypeFormError(validationMessage);
+      return;
+    }
+
+    setIsSavingType(true);
+    setTypeFormError("");
+    try {
+      await onEditType(typeDialogState.transaction.id, typePayloadFromValues(typeFormValues));
+      closeTypeDialog();
+    } catch (caught) {
+      setTypeFormError(caught instanceof Error ? caught.message : "Type could not be saved.");
+    } finally {
+      setIsSavingType(false);
+    }
+  }
+
+  async function handleSubmitCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!categoryDialogState) {
+      return;
+    }
+
+    const validationMessage = validateCategoryForm(categoryFormValues);
+    if (validationMessage) {
+      setCategoryFormError(validationMessage);
+      return;
+    }
+
+    setIsSavingCategory(true);
+    setCategoryFormError("");
+    try {
+      await onEditCategory(categoryDialogState.transaction.id, categoryPayloadFromValues(categoryFormValues));
+      closeCategoryDialog();
+    } catch (caught) {
+      setCategoryFormError(caught instanceof Error ? caught.message : "Category could not be saved.");
+    } finally {
+      setIsSavingCategory(false);
+    }
+  }
+
+  async function handleSubmitBulkType(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (selectedIds.length === 0) {
+      setBulkTypeError("Select at least one transaction.");
+      setBulkTypeNotice("");
+      return;
+    }
+    if (!isTransactionTypeValue(bulkTypeFormValues.transaction_type)) {
+      setBulkTypeError("Transaction type is required.");
+      setBulkTypeNotice("");
+      return;
+    }
+
+    setIsSavingBulkType(true);
+    setBulkTypeError("");
+    setBulkTypeNotice("");
+    try {
+      const skippedIds = await onBulkEditTypes(bulkTypePayloadFromValues(selectedIds, bulkTypeFormValues));
+      setSelectedTransactionIds(new Set());
+      if (skippedIds.length > 0) {
+        setBulkTypeNotice(`${skippedIds.length} user-edited transaction${skippedIds.length === 1 ? "" : "s"} skipped.`);
+      }
+    } catch (caught) {
+      setBulkTypeError(caught instanceof Error ? caught.message : "Types could not be saved.");
+    } finally {
+      setIsSavingBulkType(false);
+    }
+  }
+
+  async function handleSubmitBulkCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (selectedIds.length === 0) {
+      setBulkCategoryError("Select at least one transaction.");
+      setBulkCategoryNotice("");
+      return;
+    }
+
+    const formErrorMessage = validateCategoryForm({ ...bulkCategoryFormValues, use_for_future: false });
+    if (formErrorMessage) {
+      setBulkCategoryError(formErrorMessage);
+      setBulkCategoryNotice("");
+      return;
+    }
+
+    setIsSavingBulkCategory(true);
+    setBulkCategoryError("");
+    setBulkCategoryNotice("");
+    try {
+      const skippedIds = await onBulkEditCategories(bulkCategoryPayloadFromValues(selectedIds, bulkCategoryFormValues));
+      setSelectedTransactionIds(new Set());
+      if (skippedIds.length > 0) {
+        setBulkCategoryNotice(
+          `${skippedIds.length} protected or non-eligible transaction${skippedIds.length === 1 ? "" : "s"} skipped.`,
+        );
+      }
+    } catch (caught) {
+      setBulkCategoryError(caught instanceof Error ? caught.message : "Categories could not be saved.");
+    } finally {
+      setIsSavingBulkCategory(false);
+    }
+  }
+
+  return (
+    <section className="transactions-panel" aria-label="Extracted transactions">
+      <div className="transactions-panel__header">
+        <div>
+          <h3>Transactions</h3>
+          <p>
+            {transactions.length} transactions extracted
+            {reviewCount > 0 ? ` - ${reviewCount} need review` : ""}
+            {normalizationReviewCount > 0 ? ` - ${normalizationReviewCount} name review` : ""}
+            {typeReviewCount > 0 ? ` - ${typeReviewCount} type review` : ""}
+            {categoryReviewCount > 0 ? ` - ${categoryReviewCount} category review` : ""}
+            {phase8ReviewCount > 0 ? ` - ${phase8ReviewCount} summary review` : ""}
+          </p>
+        </div>
+        <div className="transactions-actions">
+          <button disabled={isActionBusy} onClick={onExtract} type="button">
+            {isExtracting ? "Extracting..." : extractButtonText}
+          </button>
+          <button
+            disabled={isActionBusy || transactions.length === 0}
+            onClick={onNormalize}
+            type="button"
+          >
+            {isNormalizing ? "Normalizing..." : normalizeButtonText}
+          </button>
+          <button
+            disabled={isActionBusy || transactions.length === 0}
+            onClick={onClassifyTypes}
+            type="button"
+          >
+            {isClassifyingTypes ? "Classifying..." : classifyButtonText}
+          </button>
+          <button
+            disabled={isActionBusy || transactions.length === 0}
+            onClick={onCategorize}
+            type="button"
+          >
+            {isCategorizing ? "Categorizing..." : categorizeButtonText}
+          </button>
+          <button disabled={isActionBusy} onClick={openAddDialog} type="button">
+            + Add Transaction
+          </button>
+        </div>
+      </div>
+
+      {latestExtraction ? (
+        <div className="transaction-state">
+          {labelFor(extractionStatusLabels, latestExtraction.status)}
+          {latestExtraction.message ? ` - ${latestExtraction.message}` : ""}
+        </div>
+      ) : null}
+      {isLoading ? <div className="transaction-state">Loading transactions...</div> : null}
+      {isExtracting ? <div className="transaction-state">Extracting transactions...</div> : null}
+      {isNormalizing ? <div className="transaction-state">Normalizing transactions...</div> : null}
+      {isClassifyingTypes ? <div className="transaction-state">Classifying transaction types...</div> : null}
+      {isCategorizing ? <div className="transaction-state">Categorizing transactions...</div> : null}
+      {error ? <div className="transaction-state transaction-state--error">{error}</div> : null}
+      {inclusionError ? <div className="transaction-state transaction-state--error">{inclusionError}</div> : null}
+      {inclusionNotice ? <div className="transaction-state">{inclusionNotice}</div> : null}
+
+      {transactions.length > 0 ? (
+        <div className="transaction-summary-grid">
+          <div>
+            <dt>Total Transactions</dt>
+            <dd>{transactions.length}</dd>
+          </div>
+          <div>
+            <dt>Selected</dt>
+            <dd>{includedCount}</dd>
+          </div>
+          <div>
+            <dt>Excluded</dt>
+            <dd>{excludedFromSummaryCount}</dd>
+          </div>
+          <div>
+            <dt>Needs Review</dt>
+            <dd>{phase8ReviewCount}</dd>
+          </div>
+          <div className="transaction-summary-grid__wide">
+            <dt>Selected Amount</dt>
+            <dd>{formatMoneyCents(selectedTotalCents)}</dd>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="transaction-sort-bar">
+        <label>
+          <span>Search Transactions</span>
+          <input
+            autoComplete="off"
+            onChange={(event) => setTransactionSearch(event.target.value)}
+            placeholder="Name or detail"
+            type="text"
+            value={transactionSearch}
+          />
+        </label>
+        <label>
+          <span>Sort Transactions</span>
+          <select value={sortBy} onChange={(event) => setSortBy(event.target.value as TransactionSortBy)}>
+            <option value="source_order">Statement Order</option>
+            <option value="normalized_name">Name</option>
+            <option value="transaction_type">Type</option>
+            <option value="main_category">Category</option>
+            <option value="subcategory">Subcategory</option>
+            <option value="transaction_date">Date</option>
+            <option value="amount">Amount</option>
+          </select>
+        </label>
+        <label>
+          <span>Direction</span>
+          <select value={sortDirection} onChange={(event) => setSortDirection(event.target.value as SortDirection)}>
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+        </label>
+        <label>
+          <span>Name Filter</span>
+          <select
+            value={normalizationFilter}
+            onChange={(event) => setNormalizationFilter(event.target.value as NormalizationFilter)}
+          >
+            {normalizationFilterOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Type Filter</span>
+          <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as TypeFilter)}>
+            {typeFilterOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Category Filter</span>
+          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as CategoryFilter)}>
+            {categoryFilterOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Selection Filter</span>
+          <select value={inclusionFilter} onChange={(event) => setInclusionFilter(event.target.value as InclusionFilter)}>
+            {inclusionFilterOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {transactions.length > 0 ? (
+        <div className="transaction-bulk-grid">
+          <div className="transaction-bulk-bar">
+            <span>{includedCount} included</span>
+            <button
+              disabled={isSavingBulkInclusion || visibleTransactionIds.length === 0}
+              onClick={() => void handleBulkInclusion(visibleTransactionIds, true, "visible")}
+              type="button"
+            >
+              Select All Visible
+            </button>
+            <button
+              disabled={isSavingBulkInclusion || visibleTransactionIds.length === 0}
+              onClick={() => void handleBulkInclusion(visibleTransactionIds, false, "visible")}
+              type="button"
+            >
+              Deselect All Visible
+            </button>
+            <button
+              disabled={isSavingBulkInclusion || transactions.length === 0}
+              onClick={() => handleAllTransactionsInclusion(true)}
+              type="button"
+            >
+              Select All Transactions
+            </button>
+            <button
+              disabled={isSavingBulkInclusion || transactions.length === 0}
+              onClick={() => handleAllTransactionsInclusion(false)}
+              type="button"
+            >
+              Deselect All Transactions
+            </button>
+            <button
+              disabled={isSavingBulkInclusion || selectedIds.length === 0}
+              onClick={() => void handleBulkInclusion(selectedIds, true, "bulk-selected")}
+              type="button"
+            >
+              Bulk Include
+            </button>
+            <button
+              disabled={isSavingBulkInclusion || selectedIds.length === 0}
+              onClick={() => void handleBulkInclusion(selectedIds, false, "bulk-selected")}
+              type="button"
+            >
+              Bulk Exclude
+            </button>
+          </div>
+          <form className="transaction-bulk-bar" onSubmit={(event) => void handleSubmitBulkType(event)}>
+            <span>{selectedIds.length} bulk selected</span>
+            <label>
+              <span>Set Type</span>
+              <select
+                value={bulkTypeFormValues.transaction_type}
+                onChange={(event) =>
+                  updateBulkTypeFormValue("transaction_type", event.target.value as TransactionTypeValue)
+                }
+              >
+                {typeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="checkbox-label transaction-bulk-bar__checkbox">
+              <input
+                checked={bulkTypeFormValues.overwrite_user_edits}
+                type="checkbox"
+                onChange={(event) => updateBulkTypeFormValue("overwrite_user_edits", event.target.checked)}
+              />
+              <span>Overwrite type edits</span>
+            </label>
+            <button disabled={isActionBusy || isSavingBulkType || selectedIds.length === 0} type="submit">
+              {isSavingBulkType ? "Saving..." : "Set Type"}
+            </button>
+            {bulkTypeError ? <span className="transaction-bulk-bar__error">{bulkTypeError}</span> : null}
+            {bulkTypeNotice ? <span className="transaction-bulk-bar__notice">{bulkTypeNotice}</span> : null}
+          </form>
+          <form className="transaction-bulk-bar" onSubmit={(event) => void handleSubmitBulkCategory(event)}>
+            <span>{selectedIds.length} bulk selected</span>
+            <label>
+              <span>Set Category</span>
+              <select
+                value={bulkCategoryFormValues.main_category}
+                onChange={(event) =>
+                  updateBulkCategoryFormValue("main_category", event.target.value as CategoryMainValue)
+                }
+              >
+                {categoryOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Set Subcategory</span>
+              <select
+                value={bulkCategoryFormValues.subcategory}
+                onChange={(event) =>
+                  updateBulkCategoryFormValue("subcategory", event.target.value as CategorySubcategoryValue)
+                }
+              >
+                {subcategoryOptionsFor(bulkCategoryFormValues.main_category).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="checkbox-label transaction-bulk-bar__checkbox">
+              <input
+                checked={bulkCategoryFormValues.overwrite_user_edits}
+                type="checkbox"
+                onChange={(event) => updateBulkCategoryFormValue("overwrite_user_edits", event.target.checked)}
+              />
+              <span>Overwrite category edits</span>
+            </label>
+            <button disabled={isActionBusy || isSavingBulkCategory || selectedIds.length === 0} type="submit">
+              {isSavingBulkCategory ? "Saving..." : "Set Category"}
+            </button>
+            <button
+              disabled={isSavingBulkType || isSavingBulkCategory || selectedIds.length === 0}
+              onClick={() => {
+                setSelectedTransactionIds(new Set());
+                setBulkTypeError("");
+                setBulkTypeNotice("");
+                setBulkCategoryError("");
+                setBulkCategoryNotice("");
+              }}
+              type="button"
+            >
+              Clear
+            </button>
+            {bulkCategoryError ? <span className="transaction-bulk-bar__error">{bulkCategoryError}</span> : null}
+            {bulkCategoryNotice ? <span className="transaction-bulk-bar__notice">{bulkCategoryNotice}</span> : null}
+          </form>
+        </div>
+      ) : null}
+
+      {transactions.length === 0 && !isLoading ? (
+        <div className="transaction-empty">No transactions extracted yet.</div>
+      ) : null}
+
+      {transactions.length > 0 && sortedTransactions.length === 0 ? (
+        <div className="transaction-empty">No transactions match the current view.</div>
+      ) : null}
+
+      {sortedTransactions.length > 0 ? (
+        <div className="transaction-table-wrap">
+          <table className="transaction-table">
+            <thead>
+              <tr>
+                <th className="transaction-include-cell">
+                  <label className="transaction-checkbox-heading">
+                    <span>Include in Expenses</span>
+                    <input
+                      ref={inclusionHeaderCheckboxRef}
+                      aria-label="Include visible transactions in expense summary"
+                      checked={allVisibleIncluded}
+                      className="transaction-table__select"
+                      disabled={visibleTransactionIds.length === 0 || isSavingBulkInclusion}
+                      onChange={(event) => void handleBulkInclusion(visibleTransactionIds, event.target.checked, "visible")}
+                      type="checkbox"
+                    />
+                  </label>
+                </th>
+                <th className="transaction-select-cell">
+                  <label className="transaction-checkbox-heading">
+                    <span>Bulk Select</span>
+                    <input
+                      ref={bulkHeaderCheckboxRef}
+                      aria-label="Select visible transactions for bulk edits"
+                      checked={allVisibleBulkSelected}
+                      className="transaction-table__select"
+                      disabled={visibleTransactionIds.length === 0}
+                      onChange={(event) => toggleVisibleTransactions(event.target.checked)}
+                      type="checkbox"
+                    />
+                  </label>
+                </th>
+                <th>Date</th>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Category</th>
+                <th>Subcategory</th>
+                <th>Transaction Detail</th>
+                <th>Direction</th>
+                <th className="transaction-table__amount">Amount</th>
+                <th>Review</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedTransactions.map((transaction) => {
+                const typeStatus = transactionTypeStatus(transaction);
+                const typeSource = transactionTypeSource(transaction);
+                const suggestedInclude = transactionSuggestedInclude(transaction);
+                const needsTypeReview = transactionNeedsTypeReview(transaction);
+                const currentCategoryStatus = categoryStatus(transaction);
+                const currentCategorySource = categorySource(transaction);
+                const currentMainCategory = categoryMainValue(transaction);
+                const currentSubcategory = categorySubcategoryValue(transaction);
+                const needsCategoryReview = categoryNeedsReview(transaction);
+                const isBulkSelected = selectedTransactionIds.has(transaction.id);
+                const isIncluded = transactionIncluded(transaction);
+                const needsPhase8Review = transactionNeedsPhase8Review(transaction);
+                const inclusionWarning = transactionInclusionWarning(transaction);
+                return (
+                  <tr
+                    key={transaction.id}
+                    className={[
+                      isIncluded ? "transaction-row--included" : "transaction-row--excluded",
+                      needsPhase8Review ? "transaction-row--review" : "",
+                    ].filter(Boolean).join(" ")}
+                  >
+                    <td className="transaction-include-cell">
+                      <input
+                        aria-label={`Include ${transaction.normalized_name ?? transaction.transaction_detail} ${formatMoney(transaction.amount)}`}
+                        checked={isIncluded}
+                        className="transaction-table__select"
+                        disabled={savingInclusionIds.has(transaction.id)}
+                        onChange={(event) => void handleToggleExpenseInclusion(transaction, event.target.checked)}
+                        type="checkbox"
+                      />
+                      {savingInclusionIds.has(transaction.id) ? (
+                        <span className="transaction-include-saving">Saving</span>
+                      ) : null}
+                    </td>
+                    <td className="transaction-select-cell">
+                      <input
+                        aria-label={`Select transaction ${transaction.source_order} for bulk edits`}
+                        checked={isBulkSelected}
+                        className="transaction-table__select"
+                        onChange={(event) => toggleTransactionSelection(transaction.id, event.target.checked)}
+                        type="checkbox"
+                      />
+                    </td>
+                    <td>{formatDateOnly(transaction.transaction_date)}</td>
+                    <td>
+                      <span className={transaction.normalized_name ? "transaction-name-text" : "transaction-name-empty"}>
+                        {transaction.normalized_name ?? "Unresolved"}
+                      </span>
+                      <span className="transaction-name-meta">
+                        {labelFor(normalizationStatusLabels, transactionNormalizationStatus(transaction))} -{" "}
+                        {formatConfidence(transactionNormalizationConfidence(transaction))}
+                      </span>
+                      {transaction.user_edited_normalization ? (
+                        <span className="transaction-badge">Name edited</span>
+                      ) : null}
+                      {transactionNormalizationSource(transaction) === "LEARNED_RULE" ? (
+                        <span className="transaction-badge">Rule</span>
+                      ) : null}
+                      {transactionNormalizationStatus(transaction) === "NEEDS_REVIEW" ? (
+                        <span className="transaction-badge">Name review</span>
+                      ) : null}
+                    </td>
+                    <td>
+                      <span
+                        className={
+                          transactionTypeValue(transaction) === "UNKNOWN"
+                            ? "transaction-type-empty"
+                            : "transaction-type-text"
+                        }
+                      >
+                        {labelFor(transactionTypeLabels, transactionTypeValue(transaction))}
+                      </span>
+                      <span className="transaction-type-meta">
+                        {labelFor(typeStatusLabels, typeStatus)} - {formatConfidence(transactionTypeConfidence(transaction))}
+                      </span>
+                      <span className="transaction-badge">
+                        {labelFor(suggestedIncludeLabels, suggestedInclude)}
+                      </span>
+                      {inclusionWarning ? <span className="transaction-badge">{inclusionWarning}</span> : null}
+                      {transaction.user_edited_type ? <span className="transaction-badge">Type edited</span> : null}
+                      {typeSource === "LEARNED_RULE" ? <span className="transaction-badge">Rule</span> : null}
+                      {needsTypeReview ? <span className="transaction-badge">Type review</span> : null}
+                    </td>
+                    <td>
+                      <span className={currentMainCategory ? "transaction-category-text" : "transaction-category-empty"}>
+                        {currentMainCategory
+                          ? labelFor(categoryLabels, currentMainCategory)
+                          : currentCategoryStatus === "NOT_APPLICABLE"
+                            ? "Not Applicable"
+                            : "Uncategorized"}
+                      </span>
+                      <span className="transaction-category-meta">
+                        {labelFor(categoryStatusLabels, currentCategoryStatus)} -{" "}
+                        {formatConfidence(categoryConfidence(transaction))}
+                      </span>
+                      {transaction.user_edited_category ? (
+                        <span className="transaction-badge">Category edited</span>
+                      ) : null}
+                      {currentCategorySource === "LEARNED_RULE" ? <span className="transaction-badge">Rule</span> : null}
+                      {needsCategoryReview ? <span className="transaction-badge">Category review</span> : null}
+                    </td>
+                    <td>
+                      <span className={currentSubcategory ? "transaction-category-text" : "transaction-category-empty"}>
+                        {currentSubcategory ? labelFor(subcategoryLabels, currentSubcategory) : "-"}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="transaction-detail-text">{transaction.transaction_detail}</span>
+                      {transaction.source_page ? (
+                        <span className="transaction-source">Page {transaction.source_page}</span>
+                      ) : null}
+                    </td>
+                    <td>{labelFor(directionLabels, String(transaction.direction))}</td>
+                    <td className="transaction-table__amount">{formatMoney(transaction.amount)}</td>
+                    <td>
+                      <span>
+                        {transactionReviewStatus(transaction) === "REVIEWED"
+                          ? "Reviewed"
+                          : needsPhase8Review
+                            ? "Needs Review"
+                            : labelFor(reviewStatusLabels, transactionReviewStatus(transaction))}
+                      </span>
+                      {!isIncluded ? <span className="transaction-badge">Excluded from summary</span> : null}
+                      {transaction.user_edited ? <span className="transaction-badge">Edited</span> : null}
+                      {transaction.user_added ? <span className="transaction-badge">User added</span> : null}
+                    </td>
+                    <td>
+                      <div className="transaction-row-actions">
+                        <button onClick={() => openNormalizationDialog(transaction)} type="button">
+                          Edit Name
+                        </button>
+                        <button onClick={() => openTypeDialog(transaction)} type="button">
+                          Edit Type
+                        </button>
+                        <button
+                          disabled={currentCategoryStatus === "NOT_APPLICABLE"}
+                          onClick={() => openCategoryDialog(transaction)}
+                          type="button"
+                        >
+                          Edit Category
+                        </button>
+                        <button onClick={() => openEditDialog(transaction)} type="button">
+                          Edit
+                        </button>
+                        <button
+                          disabled={savingReviewIds.has(transaction.id) || transactionReviewStatus(transaction) === "REVIEWED"}
+                          onClick={() => void handleMarkReviewed(transaction)}
+                          type="button"
+                        >
+                          {savingReviewIds.has(transaction.id) ? "Saving..." : "Mark Reviewed"}
+                        </button>
+                        <button className="danger-button" onClick={() => void onExclude(transaction.id)} type="button">
+                          Exclude
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {dialogState ? (
+        <div className="modal-backdrop" role="presentation">
+          <form className="transaction-dialog" onSubmit={(event) => void handleSubmitTransaction(event)}>
+            <div>
+              <h3>{dialogState.mode === "edit" ? "Edit Transaction" : "Add Transaction"}</h3>
+            </div>
+            {formError ? <div className="transaction-state transaction-state--error">{formError}</div> : null}
+            <label>
+              <span>Date</span>
+              <input
+                placeholder="YYYY-MM-DD"
+                type="text"
+                value={formValues.transaction_date}
+                onChange={(event) => updateFormValue("transaction_date", event.target.value)}
+              />
+            </label>
+            <label>
+              <span>Transaction Detail</span>
+              <input
+                type="text"
+                value={formValues.transaction_detail}
+                onChange={(event) => updateFormValue("transaction_detail", event.target.value)}
+              />
+            </label>
+            <label>
+              <span>Amount</span>
+              <input
+                inputMode="decimal"
+                type="text"
+                value={formValues.amount}
+                onChange={(event) => updateFormValue("amount", event.target.value)}
+              />
+            </label>
+            <label>
+              <span>Direction</span>
+              <select
+                value={formValues.direction}
+                onChange={(event) => updateFormValue("direction", event.target.value as TransactionDirection)}
+              >
+                {transactionDirectionOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="modal-actions">
+              <button disabled={isSaving} onClick={closeDialog} type="button">
+                Cancel
+              </button>
+              <button disabled={isSaving} type="submit">
+                {isSaving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {normalizationDialogState ? (
+        <div className="modal-backdrop" role="presentation">
+          <form className="transaction-dialog" onSubmit={(event) => void handleSubmitNormalization(event)}>
+            <div>
+              <h3>Edit Name</h3>
+            </div>
+            {normalizationFormError ? (
+              <div className="transaction-state transaction-state--error">{normalizationFormError}</div>
+            ) : null}
+            <label>
+              <span>Raw Transaction Detail</span>
+              <input readOnly type="text" value={normalizationDialogState.transaction.transaction_detail} />
+            </label>
+            <label>
+              <span>Name</span>
+              <input
+                autoFocus
+                maxLength={255}
+                type="text"
+                value={normalizationFormValues.normalized_name}
+                onChange={(event) => updateNormalizationFormValue("normalized_name", event.target.value)}
+              />
+            </label>
+            <label className="checkbox-label">
+              <input
+                checked={normalizationFormValues.use_for_future}
+                type="checkbox"
+                onChange={(event) => updateNormalizationFormValue("use_for_future", event.target.checked)}
+              />
+              <span>Use for future transactions</span>
+            </label>
+            {normalizationDialogState.transaction.original_normalized_name ? (
+              <div className="transaction-state">
+                System: {normalizationDialogState.transaction.original_normalized_name}
+              </div>
+            ) : null}
+            <div className="modal-actions">
+              <button disabled={isSavingNormalization} onClick={closeNormalizationDialog} type="button">
+                Cancel
+              </button>
+              <button disabled={isSavingNormalization} type="submit">
+                {isSavingNormalization ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {typeDialogState ? (
+        <div className="modal-backdrop" role="presentation">
+          <form className="transaction-dialog" onSubmit={(event) => void handleSubmitType(event)}>
+            <div>
+              <h3>Edit Type</h3>
+            </div>
+            {typeFormError ? <div className="transaction-state transaction-state--error">{typeFormError}</div> : null}
+            <label>
+              <span>Raw Transaction Detail</span>
+              <input readOnly type="text" value={typeDialogState.transaction.transaction_detail} />
+            </label>
+            <label>
+              <span>Name</span>
+              <input readOnly type="text" value={typeDialogState.transaction.normalized_name ?? "Unresolved"} />
+            </label>
+            <label>
+              <span>Type</span>
+              <select
+                autoFocus
+                value={typeFormValues.transaction_type}
+                onChange={(event) => updateTypeFormValue("transaction_type", event.target.value as TransactionTypeValue)}
+              >
+                {typeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="checkbox-label">
+              <input
+                checked={typeFormValues.use_for_future}
+                type="checkbox"
+                onChange={(event) => updateTypeFormValue("use_for_future", event.target.checked)}
+              />
+              <span>Use for future transactions</span>
+            </label>
+            {typeDialogState.transaction.original_transaction_type ? (
+              <div className="transaction-state">
+                System: {labelFor(transactionTypeLabels, typeDialogState.transaction.original_transaction_type)} -{" "}
+                {formatConfidence(typeDialogState.transaction.original_type_confidence)}
+              </div>
+            ) : null}
+            <div className="modal-actions">
+              <button disabled={isSavingType} onClick={closeTypeDialog} type="button">
+                Cancel
+              </button>
+              <button disabled={isSavingType} type="submit">
+                {isSavingType ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {categoryDialogState ? (
+        <div className="modal-backdrop" role="presentation">
+          <form className="transaction-dialog" onSubmit={(event) => void handleSubmitCategory(event)}>
+            <div>
+              <h3>Edit Category</h3>
+            </div>
+            {categoryFormError ? (
+              <div className="transaction-state transaction-state--error">{categoryFormError}</div>
+            ) : null}
+            <label>
+              <span>Raw Transaction Detail</span>
+              <input readOnly type="text" value={categoryDialogState.transaction.transaction_detail} />
+            </label>
+            <label>
+              <span>Type</span>
+              <input
+                readOnly
+                type="text"
+                value={labelFor(transactionTypeLabels, transactionTypeValue(categoryDialogState.transaction))}
+              />
+            </label>
+            <label>
+              <span>Main Category</span>
+              <select
+                autoFocus
+                value={categoryFormValues.main_category}
+                onChange={(event) => updateCategoryFormValue("main_category", event.target.value as CategoryMainValue)}
+              >
+                {categoryOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Subcategory</span>
+              <select
+                value={categoryFormValues.subcategory}
+                onChange={(event) =>
+                  updateCategoryFormValue("subcategory", event.target.value as CategorySubcategoryValue)
+                }
+              >
+                {subcategoryOptionsFor(categoryFormValues.main_category).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="checkbox-label">
+              <input
+                checked={categoryFormValues.use_for_future}
+                type="checkbox"
+                onChange={(event) => updateCategoryFormValue("use_for_future", event.target.checked)}
+              />
+              <span>Use for future transactions</span>
+            </label>
+            {categoryDialogState.transaction.original_category_status ? (
+              <div className="transaction-state">
+                System: {categoryPairLabel({
+                  ...categoryDialogState.transaction,
+                  main_category: categoryDialogState.transaction.original_main_category,
+                  subcategory: categoryDialogState.transaction.original_subcategory,
+                  category_status: categoryDialogState.transaction.original_category_status,
+                })}{" "}
+                - {formatConfidence(categoryDialogState.transaction.original_category_confidence)}
+              </div>
+            ) : null}
+            <div className="modal-actions">
+              <button disabled={isSavingCategory} onClick={closeCategoryDialog} type="button">
+                Cancel
+              </button>
+              <button disabled={isSavingCategory} type="submit">
+                {isSavingCategory ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function PreviewPane({ file }: { file: StoredFile }) {
+  const previewType = fileCanPreview(file);
+  const [previewState, setPreviewState] = useState<PreviewState>(
+    previewType === "unsupported" ? { status: "unsupported" } : { status: "loading" },
+  );
+
+  useEffect(() => {
+    if (previewType === "unsupported") {
+      setPreviewState({ status: "unsupported" });
+      return;
+    }
+
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    let isActive = true;
+
+    setPreviewState({ status: "loading" });
+
+    void fetch(filePreviewUrl(file.id), { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          let message = "Preview could not be loaded.";
+          try {
+            const data = (await response.json()) as { detail?: unknown };
+            if (typeof data.detail === "string") {
+              message = data.detail;
+            }
+          } catch {
+            message = response.status === 404 ? "Stored file is missing." : message;
+          }
+          throw new Error(message);
+        }
+        const blob = await response.blob();
+        const nextUrl = URL.createObjectURL(blob);
+        if (!isActive) {
+          URL.revokeObjectURL(nextUrl);
+          return;
+        }
+        objectUrl = nextUrl;
+        setPreviewState({ status: "ready", objectUrl: nextUrl });
+      })
+      .catch((caught) => {
+        if (controller.signal.aborted || !isActive) {
+          return;
+        }
+        setPreviewState({
+          status: "error",
+          message: caught instanceof Error ? caught.message : "Preview could not be loaded.",
+        });
+      });
+
+    return () => {
+      isActive = false;
+      controller.abort();
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [file.id, previewType]);
+
+  if (previewState.status === "unsupported") {
+    return (
+      <div className="unsupported-preview">
+        Preview is not available for this file type. Use Download to open it locally.
+      </div>
+    );
+  }
+
+  if (previewState.status === "loading") {
+    return <div className="preview-status" aria-live="polite">Loading preview...</div>;
+  }
+
+  if (previewState.status === "error") {
+    return (
+      <div className="unsupported-preview" aria-live="polite">
+        {previewState.message}
+      </div>
+    );
+  }
+
+  if (previewType === "image") {
+    return (
+      <div className="preview-surface">
+        <img
+          alt={file.display_name}
+          onError={() =>
+            setPreviewState({ status: "error", message: "Image preview could not be displayed." })
+          }
+          src={previewState.objectUrl}
+        />
+      </div>
+    );
+  }
+
+  return <iframe className="pdf-preview" src={previewState.objectUrl} title={file.display_name} />;
 }

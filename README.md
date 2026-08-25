@@ -1,9 +1,9 @@
 # Personal Financial File Manager
 
-Personal Financial File Manager is a single-user personal website for organizing financial files, analyzing bank and credit-card statements, selecting and categorizing transactions, and producing expense summaries.
+Personal Financial File Manager is a single-user personal website for organizing personal financial files, previewing stored documents, and later analyzing bank and credit-card statements.
 
 Current Development Phase:
-Phase 1 - Project Foundation
+Phase 3 - Bank Statement Detection
 
 This application is intentionally single-user and does not include login/authentication.
 
@@ -13,7 +13,8 @@ This application is intentionally single-user and does not include login/authent
 - FastAPI backend in `backend/`
 - SQLite database configured through SQLAlchemy
 - Alembic database migrations
-- Local generated data stored outside Git-tracked files
+- Private local file storage under `storage/files/`
+- Rule-based PDF statement detection for supported institutions
 
 ## Setup
 
@@ -47,6 +48,8 @@ Key values:
 
 - `FRONTEND_URL` controls the allowed local CORS origins for the backend as a comma-separated list.
 - `DATABASE_URL` may be left blank to use the default local SQLite database at `data/app.db`.
+- `STORAGE_DIR` may be left blank to use private local storage at `storage/files/`.
+- `MAX_UPLOAD_BYTES` controls the per-file upload size limit. The default is 25 MB.
 - `VITE_API_URL` controls the backend API base URL used by the frontend. The frontend defaults to `http://127.0.0.1:8000`; create `frontend/.env` from `frontend/.env.example` only if you need to override it.
 
 Do not commit `.env`, database files, uploaded statements, or other personal financial data.
@@ -60,7 +63,36 @@ From `backend/`:
 ..\.venv\bin\alembic.exe current
 ```
 
-Phase 1 includes one temporary infrastructure table, `infrastructure_checks`, used only to prove database write/read behavior.
+Phase 1 added the temporary `infrastructure_checks` table.
+
+Phase 2 adds:
+
+- `folders`
+- `files`
+
+Folders use `parent_folder_id` as a nullable self-reference, which supports arbitrary nesting. Files reference folders through `folder_id`, which may be null for root-level files.
+
+Phase 3 adds:
+
+- `statements`
+
+Each statement detection record is linked one-to-one with a file through `file_id`, so re-analysis updates the existing metadata instead of creating duplicates.
+
+## Storage Architecture
+
+Uploaded files are stored privately by the backend in `storage/files/`.
+
+The original uploaded filename is preserved in the database as `original_filename` and `display_name`, but the physical file uses a generated unique filename such as:
+
+```text
+7d7df8d2c8f44b81a4f7db8b6f9183c9.pdf
+```
+
+The frontend never receives the raw storage path. Files are downloaded or previewed through backend endpoints.
+
+Duplicate display names are prevented within the same folder to keep the personal file tree clear. The same display name may be used in different folders.
+
+Folder deletion uses database cascades for child records, then removes the corresponding private stored files. File deletion removes the database record and then deletes the physical file.
 
 ## Running the Backend
 
@@ -76,6 +108,7 @@ Useful checks:
 Invoke-RestMethod http://127.0.0.1:8000/
 Invoke-RestMethod http://127.0.0.1:8000/api/health
 Invoke-RestMethod http://127.0.0.1:8000/api/health/db
+Invoke-RestMethod http://127.0.0.1:8000/api/file-manager/tree
 ```
 
 ## Running the Frontend
@@ -88,9 +121,49 @@ npm run dev -- --host 127.0.0.1
 
 Open `http://127.0.0.1:5173`.
 
+## File Manager API
+
+Core endpoints:
+
+```text
+GET    /api/file-manager/tree
+GET    /api/folders
+POST   /api/folders
+PATCH  /api/folders/{id}
+DELETE /api/folders/{id}
+GET    /api/files
+POST   /api/files
+PATCH  /api/files/{id}
+DELETE /api/files/{id}
+GET    /api/files/{id}/download
+GET    /api/files/{id}/preview
+GET    /api/files/{id}/statement
+POST   /api/files/{id}/detect-statement
+```
+
+The tree endpoint supports:
+
+```text
+search=
+sort_by=name|created_at|updated_at|file_size
+sort_direction=asc|desc
+```
+
+Statement detection is manual in Phase 3. Select a PDF in the file manager and use Analyze File or Re-analyze to store document-level metadata such as institution, document type, account type, last four, statement period, confidence, and status. Full PDF text, full account numbers, balances, and transaction rows are not stored.
+
+Supported deterministic detection targets:
+
+- Chase
+- Capital One
+- American Express
+- PayPal
+- TJX / TJ Maxx
+- Amazon-branded financial products
+- Other / Unknown
+
 ## Tests
 
-Backend tests and lint:
+Backend tests and syntax check:
 
 ```powershell
 cd backend
@@ -123,18 +196,17 @@ On macOS/Linux, after setup:
 
 ## Current Limitations
 
-Phase 1 does not yet contain:
+Phase 3 does not yet contain:
 
-- folder management
-- file uploads
-- bank statement processing
 - OCR
 - transaction extraction
 - categorization
 - expense selection
 - reports
 - exports
+- AI analysis
+- receipt functionality
 
 The next development phase is:
 
-PHASE 2 - File and Folder Management
+PHASE 4 - Transaction Extraction
