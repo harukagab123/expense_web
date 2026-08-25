@@ -194,6 +194,13 @@ def test_summary_excluded_transactions_skip_category_noise_but_keep_extraction_a
         needs_review=True,
         source_order=3,
     )
+    add_transaction(
+        statement_id,
+        "Summary Excluded Unknown Type",
+        include_in_expenses=False,
+        source_order=4,
+        transaction_type="UNKNOWN",
+    )
 
     response = client.get("/api/attention")
 
@@ -201,6 +208,27 @@ def test_summary_excluded_transactions_skip_category_noise_but_keep_extraction_a
     attention_types = [item["attention_type"] for item in response.json()["items"]]
     assert attention_types.count("CATEGORY_MISSING") == 1
     assert "TRANSACTION_EXTRACTION_REVIEW" in attention_types
+    assert "TRANSACTION_TYPE_UNKNOWN" in attention_types
+
+
+def test_reviewed_unknown_transaction_type_is_accepted_and_resolved(client: TestClient) -> None:
+    file = upload_pdf(client, "reviewed-unknown-type.pdf")
+    statement_id = create_statement(file["id"])
+    transaction_id = add_transaction(
+        statement_id,
+        "Unknown Accepted",
+        category_status="NOT_APPLICABLE",
+        transaction_type="UNKNOWN",
+    )
+
+    before = client.get("/api/attention")
+    reviewed = client.patch(f"/api/transactions/{transaction_id}/review", json={"review_status": "REVIEWED"})
+    after = client.get("/api/attention")
+
+    assert before.status_code == 200
+    assert before.json()["items"][0]["attention_type"] == "TRANSACTION_TYPE_UNKNOWN"
+    assert reviewed.status_code == 200, reviewed.text
+    assert after.json()["total"] == 0
 
 
 def test_reviewed_uncategorized_transaction_is_accepted_and_resolved(client: TestClient) -> None:
