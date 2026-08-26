@@ -40,6 +40,9 @@ class FileResponse(BaseModel):
     stored_filename: str
     mime_type: str
     file_size: int
+    source_file_available: bool
+    source_file_removed_at: datetime | None
+    source_file_removal_reason: str | None
     created_at: datetime
     updated_at: datetime
 

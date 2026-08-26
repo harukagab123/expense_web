@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import UTC, datetime
 import logging
 from pathlib import Path
 from uuid import uuid4
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".csv", ".xlsx", ".txt"}
 PREVIEW_MIME_TYPES = {"application/pdf", "image/jpeg", "image/png"}
 CHUNK_SIZE = 1024 * 1024
+SOURCE_FILE_REMOVAL_RETENTION = "RETENTION_LIMIT"
 _UNSET = object()
 
 
@@ -63,7 +65,10 @@ def _folder_name_query(name: str, parent_folder_id: int | None) -> Select[tuple[
 
 
 def _file_name_query(display_name: str, folder_id: int | None) -> Select[tuple[StoredFile]]:
-    statement = select(StoredFile).where(StoredFile.display_name == display_name)
+    statement = select(StoredFile).where(
+        StoredFile.display_name == display_name,
+        StoredFile.source_file_available.is_(True),
+    )
     if folder_id is None:
         return statement.where(StoredFile.folder_id.is_(None))
     return statement.where(StoredFile.folder_id == folder_id)
@@ -274,6 +279,21 @@ def delete_file(session: Session, file_id: int) -> None:
     _delete_storage_paths([storage_path])
 
 
+def mark_source_file_removed_by_retention(
+    session: Session,
+    stored_file: StoredFile,
+    *,
+    reason: str = SOURCE_FILE_REMOVAL_RETENTION,
+) -> None:
+    if not stored_file.source_file_available:
+        return
+    storage_path = stored_file.storage_path
+    _delete_storage_paths([storage_path])
+    stored_file.source_file_available = False
+    stored_file.source_file_removed_at = datetime.now(UTC)
+    stored_file.source_file_removal_reason = reason
+
+
 def _delete_storage_paths(storage_paths: list[str]) -> None:
     root = _storage_root().resolve()
     for storage_path in storage_paths:
@@ -292,6 +312,12 @@ def ensure_preview_supported(stored_file: StoredFile) -> None:
     if extension in {".pdf", ".jpg", ".jpeg", ".png"}:
         return
     raise HTTPException(status_code=415, detail="Preview is not supported for this file type.")
+
+
+def ensure_source_file_available(stored_file: StoredFile) -> None:
+    if stored_file.source_file_available:
+        return
+    raise HTTPException(status_code=410, detail="Original source file no longer stored.")
 
 
 def _file_item(stored_file: StoredFile) -> FileTreeItem:
@@ -326,7 +352,11 @@ def build_tree(
     search: str = "",
 ) -> tuple[list[FolderTreeNode], list[FileTreeItem]]:
     folders = list(session.execute(select(Folder)).scalars().all())
-    files = list(session.execute(select(StoredFile)).scalars().all())
+    files = list(
+        session.execute(
+            select(StoredFile).where(StoredFile.source_file_available.is_(True))
+        ).scalars().all()
+    )
     descending = sort_direction == "desc"
     safe_sort = sort_by if sort_by in {"name", "created_at", "updated_at", "file_size"} else "name"
     search_text = search.strip().lower()
@@ -399,7 +429,11 @@ def search_items(session: Session, query: str, limit: int = 40) -> list[SearchRe
         return []
 
     folders = list(session.execute(select(Folder)).scalars().all())
-    files = list(session.execute(select(StoredFile)).scalars().all())
+    files = list(
+        session.execute(
+            select(StoredFile).where(StoredFile.source_file_available.is_(True))
+        ).scalars().all()
+    )
     folders_by_id = {folder.id: folder for folder in folders}
     results: list[SearchResult] = []
 

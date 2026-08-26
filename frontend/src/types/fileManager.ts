@@ -10,6 +10,9 @@ export type StoredFile = {
   stored_filename: string;
   mime_type: string;
   file_size: number;
+  source_file_available: boolean;
+  source_file_removed_at: string | null;
+  source_file_removal_reason: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -270,6 +273,37 @@ export type TransactionTypeClassificationRunResponse = {
 
 export type TransactionCategorizationRunResponse = {
   transactions: StatementTransaction[];
+};
+
+export type AnalysisStepStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "SKIPPED";
+
+export type AnalysisStep = {
+  key: string;
+  label: string;
+  status: AnalysisStepStatus;
+  message: string | null;
+};
+
+export type RetentionSummary = {
+  institution: string | null;
+  removed_count: number;
+  removed_files: Array<{
+    file_id: number;
+    display_name: string;
+    institution: string;
+    removed_at: string | null;
+    reason: string;
+  }>;
+};
+
+export type StatementAnalysisResponse = {
+  status: "COMPLETED" | "FAILED";
+  failed_step: string | null;
+  statement: StatementDetection;
+  extraction: TransactionExtraction | null;
+  transactions: StatementTransaction[];
+  steps: AnalysisStep[];
+  retention: RetentionSummary;
 };
 
 export type TransactionTypeBulkUpdateResponse = {

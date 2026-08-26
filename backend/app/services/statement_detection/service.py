@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.file import StoredFile
 from app.models.statement import Statement
 from app.schemas.statement import StatementUpdate
-from app.services.file_manager import get_file_or_404, resolve_storage_path
+from app.services.file_manager import ensure_source_file_available, get_file_or_404, resolve_storage_path
 from app.services.statement_detection.base import (
     ACCOUNT_UNKNOWN,
     DOCUMENT_UNKNOWN,
@@ -46,6 +46,7 @@ def get_statement_for_file(session: Session, file_id: int) -> Statement | None:
 
 def detect_statement_for_file(session: Session, file_id: int) -> Statement:
     stored_file = get_file_or_404(session, file_id)
+    ensure_source_file_available(stored_file)
     _ensure_pdf_supported(stored_file)
     file_path = resolve_storage_path(stored_file)
     if not file_path.exists():

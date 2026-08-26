@@ -8,6 +8,7 @@ import type {
   SortBy,
   SortDirection,
   StatementDetection,
+  StatementAnalysisResponse,
   StatementLookupResponse,
   StatementUpdate,
   StatementTransaction,
@@ -171,6 +172,10 @@ export async function getStatementForFile(fileId: number, signal?: AbortSignal):
 
 export async function detectStatement(fileId: number): Promise<StatementDetection> {
   return requestJson<StatementDetection>(`/api/files/${fileId}/detect-statement`, { method: "POST" });
+}
+
+export async function analyzeStatementFile(fileId: number): Promise<StatementAnalysisResponse> {
+  return requestJson<StatementAnalysisResponse>(`/api/files/${fileId}/analyze`, { method: "POST" });
 }
 
 export async function updateStatementForFile(fileId: number, payload: StatementUpdate): Promise<StatementDetection> {

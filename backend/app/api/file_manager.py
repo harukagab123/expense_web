@@ -22,6 +22,7 @@ from app.schemas.file_manager import (
     UploadFailure,
     UploadSuccess,
 )
+from app.schemas.analysis import StatementAnalysisResponse
 from app.schemas.statement import StatementLookupResponse, StatementResponse, StatementUpdate
 from app.schemas.transaction import (
     CategoryCatalogResponse,
@@ -53,6 +54,7 @@ from app.services.file_manager import (
     delete_file,
     delete_folder,
     ensure_preview_supported,
+    ensure_source_file_available,
     get_file_or_404,
     resolve_storage_path,
     search_items,
@@ -65,6 +67,7 @@ from app.services.statement_detection.service import (
     get_statement_for_file,
     update_statement_for_file,
 )
+from app.services.statement_analysis import analyze_statement_file
 from app.services.transaction_categorization.service import (
     bulk_update_transaction_categories,
     categorize_transactions_for_statement,
@@ -150,7 +153,7 @@ def delete_folder_endpoint(folder_id: int, db: Session = Depends(get_db)) -> Res
 
 @router.get("/files", response_model=list[FileResponse])
 def list_files(folder_id: int | None = None, db: Session = Depends(get_db)) -> list[FileResponse]:
-    statement = select(StoredFile).order_by(StoredFile.display_name)
+    statement = select(StoredFile).where(StoredFile.source_file_available.is_(True)).order_by(StoredFile.display_name)
     if folder_id is None:
         statement = statement.where(StoredFile.folder_id.is_(None))
     else:
@@ -213,6 +216,11 @@ def read_file_statement_endpoint(file_id: int, db: Session = Depends(get_db)) ->
 def detect_file_statement_endpoint(file_id: int, db: Session = Depends(get_db)) -> StatementResponse:
     statement = detect_statement_for_file(db, file_id)
     return StatementResponse.from_orm(statement)
+
+
+@router.post("/files/{file_id}/analyze", response_model=StatementAnalysisResponse)
+def analyze_file_statement_endpoint(file_id: int, db: Session = Depends(get_db)) -> StatementAnalysisResponse:
+    return analyze_statement_file(db, file_id)
 
 
 @router.patch("/files/{file_id}/statement", response_model=StatementResponse)
@@ -400,6 +408,7 @@ def exclude_transaction_endpoint(transaction_id: int, db: Session = Depends(get_
 @router.get("/files/{file_id}/download")
 def download_file_endpoint(file_id: int, db: Session = Depends(get_db)) -> FastAPIFileResponse:
     stored_file = get_file_or_404(db, file_id)
+    ensure_source_file_available(stored_file)
     file_path = resolve_storage_path(stored_file)
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Stored file is missing.")
@@ -413,6 +422,7 @@ def download_file_endpoint(file_id: int, db: Session = Depends(get_db)) -> FastA
 @router.get("/files/{file_id}/preview")
 def preview_file_endpoint(file_id: int, db: Session = Depends(get_db)) -> FastAPIFileResponse:
     stored_file = get_file_or_404(db, file_id)
+    ensure_source_file_available(stored_file)
     ensure_preview_supported(stored_file)
     file_path = resolve_storage_path(stored_file)
     if not file_path.exists():

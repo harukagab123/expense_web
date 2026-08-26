@@ -734,6 +734,50 @@ input[type="file"] {
   color: #8a1f11;
 }
 
+.analysis-progress {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  list-style: none;
+}
+
+.analysis-progress__item {
+  display: grid;
+  grid-template-columns: 20px minmax(140px, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  color: #52606d;
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.analysis-progress__item--completed {
+  color: #276749;
+}
+
+.analysis-progress__item--running {
+  color: #0b4f71;
+}
+
+.analysis-progress__item--failed {
+  color: #8a1f11;
+}
+
+.analysis-progress__item--skipped {
+  color: #829ab1;
+}
+
+.analysis-progress__message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #627d98;
+  font-weight: 650;
+}
+
 .statement-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(180px, 1fr));
@@ -1070,6 +1114,34 @@ input[type="file"] {
 
 .transaction-row--review {
   background: #fffaf0;
+}
+
+.transaction-row--editing td {
+  background: #f5fbff;
+}
+
+.transaction-inline-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 1px solid #bcccdc;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #102a43;
+  font: inherit;
+}
+
+.transaction-inline-input--amount {
+  text-align: right;
+}
+
+.transaction-inline-error {
+  display: block;
+  width: 100%;
+  color: #8a1f11;
+  font-size: 0.74rem;
+  font-weight: 800;
 }
 
 .transaction-row--attention td {

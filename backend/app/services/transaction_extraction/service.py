@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.models.statement import Statement
 from app.models.transaction import Transaction, TransactionExtraction
 from app.schemas.transaction import TransactionCreate, TransactionUpdate
-from app.services.file_manager import resolve_storage_path
+from app.services.file_manager import ensure_source_file_available, resolve_storage_path
 from app.services.statement_detection.base import INSTITUTION_UNKNOWN
 from app.services.statement_detection.pdf_text import PdfTextExtractionError, extract_pdf_pages
 from app.services.transaction_extraction.base import (
@@ -103,6 +103,7 @@ def extract_transactions_for_statement(session: Session, statement_id: int) -> t
         return extraction, initialize_phase8_state_for_statement(session, statement.id)
 
     _ensure_pdf_supported(statement)
+    ensure_source_file_available(statement.file)
     file_path = resolve_storage_path(statement.file)
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Stored file is missing.")
@@ -218,6 +219,12 @@ def update_transaction(session: Session, transaction_id: int, payload: Transacti
         from app.services.transaction_type_detection.service import reset_machine_type
 
         reset_machine_type(transaction)
+        if direction_changed:
+            from app.services.transaction_categorization.service import reset_category_for_type_change
+            from app.services.transaction_type_detection.rules import suggested_include_for_type
+
+            transaction.suggested_include = suggested_include_for_type(transaction.transaction_type, transaction.direction)
+            reset_category_for_type_change(transaction)
     if (
         {"transaction_date", "transaction_detail", "amount", "direction"} & payload.__fields_set__
     ):
@@ -287,44 +294,36 @@ def _replace_unprotected_machine_transactions(
             phase8_state_by_key[_semantic_key_from_transaction(transaction)].append(
                 _phase8_state_from_transaction(transaction)
             )
-
+    reusable_transactions_by_key: dict[tuple[str, str, Decimal, str], list[Transaction]] = defaultdict(list)
     for transaction in existing_transactions:
         if not _transaction_is_reprocessing_protected(transaction):
-            session.delete(transaction)
-    session.flush()
+            reusable_transactions_by_key[_semantic_key_from_transaction(transaction)].append(transaction)
+
+    reused_transaction_ids: set[int] = set()
 
     for extracted in extracted_transactions:
         key = _semantic_key_from_extracted(extracted)
         if protected_key_counts[key] > 0:
             protected_key_counts[key] -= 1
+            _pop_phase8_state(phase8_state_by_key, key)
             continue
-        phase8_state = _pop_phase8_state(phase8_state_by_key, key)
 
-        transaction = Transaction(
-            statement_id=statement_id,
-            extraction_id=extraction_id,
-            transaction_date=extracted.transaction_date,
-            transaction_detail=extracted.transaction_detail,
-            amount=extracted.amount,
-            direction=extracted.direction,
-            source_page=extracted.source_page,
-            source_order=extracted.source_order,
-            extraction_confidence=extracted.extraction_confidence,
-            needs_review=extracted.needs_review,
-            user_edited=False,
-            user_added=False,
-            excluded=False,
-            source=SOURCE_EXTRACTED,
-            original_transaction_date=extracted.transaction_date,
-            original_transaction_detail=extracted.transaction_detail,
-            original_amount=extracted.amount,
-            original_direction=extracted.direction,
-            original_source_page=extracted.source_page,
-            original_source_order=extracted.source_order,
-        )
+        reusable_transaction = _pop_reusable_transaction(reusable_transactions_by_key, key)
+        if reusable_transaction is not None:
+            _pop_phase8_state(phase8_state_by_key, key)
+            _apply_extracted_transaction(reusable_transaction, extraction_id, extracted)
+            reused_transaction_ids.add(reusable_transaction.id)
+            continue
+
+        phase8_state = _pop_phase8_state(phase8_state_by_key, key)
+        transaction = _new_extracted_transaction(statement_id, extraction_id, extracted)
         if phase8_state is not None:
             _apply_phase8_state(transaction, phase8_state)
         session.add(transaction)
+
+    for transaction in existing_transactions:
+        if not _transaction_is_reprocessing_protected(transaction) and transaction.id not in reused_transaction_ids:
+            session.delete(transaction)
     session.flush()
 
 
@@ -370,6 +369,52 @@ def _apply_phase8_state(transaction: Transaction, phase8_state: _Phase8State) ->
     transaction.review_status = phase8_state.review_status
     transaction.review_source = phase8_state.review_source
     transaction.review_updated_at = phase8_state.review_updated_at
+
+
+def _pop_reusable_transaction(
+    reusable_transactions_by_key: dict[tuple[str, str, Decimal, str], list[Transaction]],
+    key: tuple[str, str, Decimal, str],
+) -> Transaction | None:
+    transactions = reusable_transactions_by_key.get(key)
+    if not transactions:
+        return None
+    return transactions.pop(0)
+
+
+def _new_extracted_transaction(
+    statement_id: int,
+    extraction_id: int,
+    extracted: ExtractedTransaction,
+) -> Transaction:
+    transaction = Transaction(statement_id=statement_id)
+    _apply_extracted_transaction(transaction, extraction_id, extracted)
+    return transaction
+
+
+def _apply_extracted_transaction(
+    transaction: Transaction,
+    extraction_id: int,
+    extracted: ExtractedTransaction,
+) -> None:
+    transaction.extraction_id = extraction_id
+    transaction.transaction_date = extracted.transaction_date
+    transaction.transaction_detail = extracted.transaction_detail
+    transaction.amount = extracted.amount
+    transaction.direction = extracted.direction
+    transaction.source_page = extracted.source_page
+    transaction.source_order = extracted.source_order
+    transaction.extraction_confidence = extracted.extraction_confidence
+    transaction.needs_review = extracted.needs_review
+    transaction.user_edited = False
+    transaction.user_added = False
+    transaction.excluded = False
+    transaction.source = SOURCE_EXTRACTED
+    transaction.original_transaction_date = extracted.transaction_date
+    transaction.original_transaction_detail = extracted.transaction_detail
+    transaction.original_amount = extracted.amount
+    transaction.original_direction = extracted.direction
+    transaction.original_source_page = extracted.source_page
+    transaction.original_source_order = extracted.source_order
 
 
 def _semantic_key_from_extracted(transaction: ExtractedTransaction) -> tuple[str, str, Decimal, str]:

@@ -2,19 +2,16 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import "./App.css";
 import {
+  analyzeStatementFile,
   bulkUpdateTransactionReview,
   bulkUpdateTransactionTypes,
   bulkUpdateTransactionCategories,
   bulkUpdateTransactionInclusion,
-  categorizeTransactions,
-  classifyTransactionTypes,
   createTransactionForStatement,
   createFolder,
   deleteFolder,
   deleteStoredFile,
-  detectStatement,
   excludeTransaction,
-  extractTransactions,
   fileDownloadUrl,
   filePreviewUrl,
   getAttention,
@@ -22,7 +19,6 @@ import {
   getFileManagerTree,
   getStatementForFile,
   getTransactionsForStatement,
-  normalizeTransactions,
   searchFileManager,
   updateFolder,
   updateStatementForFile,
@@ -31,11 +27,11 @@ import {
   updateTransactionCategory,
   updateTransactionInclusion,
   updateTransactionNormalization,
-  updateTransactionReview,
   updateTransactionType,
   uploadFiles,
 } from "./api/fileManager";
 import type {
+  AnalysisStep,
   AttentionItem,
   AttentionListResponse,
   FileManagerTree,
@@ -59,7 +55,6 @@ import type {
   TransactionNormalizationPayload,
   TransactionPayload,
   TransactionReviewBulkPayload,
-  TransactionReviewPayload,
   TransactionTypeBulkPayload,
   TransactionTypePayload,
   TransactionTypeValue,
@@ -121,20 +116,18 @@ type TransactionFormValues = {
   direction: TransactionDirection;
 };
 
-type TransactionDialogState =
-  | { mode: "add"; transaction?: undefined }
-  | { mode: "edit"; transaction: StatementTransaction }
-  | null;
+type InlineTransactionEditValues = TransactionFormValues & {
+  normalized_name: string;
+  transaction_type: TransactionTypeValue;
+  main_category: CategoryMainValue;
+  subcategory: CategorySubcategoryValue;
+};
 
-type NormalizationDialogState = { transaction: StatementTransaction } | null;
+type TransactionDialogState = { mode: "add" } | null;
 
 type NormalizationFilter = "all" | "normalized" | "needs_review" | "user_edited" | "unresolved";
 
-type TypeDialogState = { transaction: StatementTransaction } | null;
-
 type TypeFilter = "all" | "classified" | "needs_review" | "user_edited" | "included" | "excluded" | "unknown";
-
-type CategoryDialogState = { transaction: StatementTransaction } | null;
 
 type CategoryFilter =
   | "all"
@@ -147,16 +140,6 @@ type CategoryFilter =
   | "not_applicable";
 
 type InclusionFilter = "all" | "included" | "excluded" | "needs_review" | "reviewed";
-
-type NormalizationFormValues = {
-  normalized_name: string;
-  use_for_future: boolean;
-};
-
-type TypeFormValues = {
-  transaction_type: TransactionTypeValue;
-  use_for_future: boolean;
-};
 
 type BulkTypeFormValues = {
   transaction_type: TransactionTypeValue;
@@ -189,6 +172,40 @@ const emptyAttention: AttentionListResponse = {
   ready_for_summary: true,
   items: [],
 };
+
+const analyzeStepLabels: Array<{ key: string; label: string }> = [
+  { key: "statement_detection", label: "Statement detection" },
+  { key: "transaction_extraction", label: "Transaction extraction" },
+  { key: "transaction_normalization", label: "Normalize transaction names" },
+  { key: "transaction_type_classification", label: "Classify transaction types" },
+  { key: "transaction_categorization", label: "Categorize eligible transactions" },
+  { key: "review_notification_refresh", label: "Refresh review notifications" },
+  { key: "source_file_retention", label: "Apply source file retention" },
+];
+
+function initialAnalyzeSteps(): AnalysisStep[] {
+  return analyzeStepLabels.map((step, index) => ({
+    ...step,
+    status: index === 0 ? "RUNNING" : "PENDING",
+    message: null,
+  }));
+}
+
+function analysisStepMarker(status: AnalysisStep["status"]): string {
+  if (status === "COMPLETED") {
+    return "✓";
+  }
+  if (status === "RUNNING") {
+    return "→";
+  }
+  if (status === "FAILED") {
+    return "!";
+  }
+  if (status === "SKIPPED") {
+    return "-";
+  }
+  return "○";
+}
 
 const sortOptions: Array<{ value: SortBy; label: string }> = [
   { value: "name", label: "Name" },
@@ -565,27 +582,6 @@ function transactionMatchesTypeFilter(transaction: StatementTransaction, filter:
   return type === "UNKNOWN";
 }
 
-function typeToFormValues(transaction: StatementTransaction): TypeFormValues {
-  return {
-    transaction_type: transactionTypeValue(transaction),
-    use_for_future: false,
-  };
-}
-
-function validateTypeForm(values: TypeFormValues): string {
-  if (!isTransactionTypeValue(values.transaction_type)) {
-    return "Transaction type is required.";
-  }
-  return "";
-}
-
-function typePayloadFromValues(values: TypeFormValues): TransactionTypePayload {
-  return {
-    transaction_type: values.transaction_type,
-    use_for_future: values.use_for_future,
-  };
-}
-
 function bulkTypePayloadFromValues(
   selectedTransactionIds: number[],
   values: BulkTypeFormValues,
@@ -679,19 +675,6 @@ function transactionMatchesCategoryFilter(transaction: StatementTransaction, fil
   return status === "NOT_APPLICABLE";
 }
 
-function categoryToFormValues(transaction: StatementTransaction): CategoryFormValues {
-  const mainCategory = categoryMainValue(transaction) ?? "PERSONAL_INTERNAL";
-  const subcategory = categorySubcategoryValue(transaction);
-  const validSubcategories = subcategoryOptionsFor(mainCategory);
-  return {
-    main_category: mainCategory,
-    subcategory: subcategory && validSubcategories.some((option) => option.value === subcategory)
-      ? subcategory
-      : defaultSubcategoryFor(mainCategory),
-    use_for_future: false,
-  };
-}
-
 function validateCategoryForm(values: CategoryFormValues): string {
   if (!isCategoryMainValue(values.main_category)) {
     return "Main category is required.";
@@ -700,14 +683,6 @@ function validateCategoryForm(values: CategoryFormValues): string {
     return "Subcategory is not valid for the selected main category.";
   }
   return "";
-}
-
-function categoryPayloadFromValues(values: CategoryFormValues): TransactionCategoryPayload {
-  return {
-    main_category: values.main_category,
-    subcategory: values.subcategory,
-    use_for_future: values.use_for_future,
-  };
 }
 
 function bulkCategoryPayloadFromValues(
@@ -887,25 +862,93 @@ function transactionPayloadFromValues(values: TransactionFormValues): Required<T
   };
 }
 
-function normalizationToFormValues(transaction: StatementTransaction): NormalizationFormValues {
+function transactionCategoryEditable(type: TransactionTypeValue, direction: TransactionDirection): boolean {
+  if (type === "INTEREST") {
+    return direction === "OUTFLOW";
+  }
+  return type === "EXPENSE" || type === "BANK_FEE";
+}
+
+function inlineEditValuesFromTransaction(transaction: StatementTransaction): InlineTransactionEditValues {
+  const mainCategory = categoryMainValue(transaction) ?? "PERSONAL_INTERNAL";
+  const subcategory = categorySubcategoryValue(transaction);
+  const validSubcategories = subcategoryOptionsFor(mainCategory);
   return {
+    ...transactionToFormValues(transaction),
     normalized_name: transaction.normalized_name ?? "",
-    use_for_future: false,
+    transaction_type: transactionTypeValue(transaction),
+    main_category: mainCategory,
+    subcategory: subcategory && validSubcategories.some((option) => option.value === subcategory)
+      ? subcategory
+      : defaultSubcategoryFor(mainCategory),
   };
 }
 
-function validateNormalizationForm(values: NormalizationFormValues): string {
-  if (!values.normalized_name.trim()) {
+function validateInlineTransactionEdit(
+  values: InlineTransactionEditValues,
+  transaction: StatementTransaction,
+): string {
+  const transactionValidation = validateTransactionForm(values);
+  if (transactionValidation) {
+    return transactionValidation;
+  }
+  const initialValues = inlineEditValuesFromTransaction(transaction);
+  if (values.normalized_name !== initialValues.normalized_name && !values.normalized_name.trim()) {
     return "Name is required.";
+  }
+  if (!isTransactionTypeValue(values.transaction_type)) {
+    return "Transaction type is required.";
+  }
+  if (transactionCategoryEditable(values.transaction_type, values.direction)) {
+    return validateCategoryForm({ ...values, use_for_future: false });
   }
   return "";
 }
 
-function normalizationPayloadFromValues(values: NormalizationFormValues): TransactionNormalizationPayload {
-  return {
-    normalized_name: values.normalized_name.trim().replace(/\s+/g, " "),
-    use_for_future: values.use_for_future,
-  };
+function inlineTransactionEditIsDirty(
+  transaction: StatementTransaction,
+  values: InlineTransactionEditValues,
+): boolean {
+  const initialValues = inlineEditValuesFromTransaction(transaction);
+  return (
+    values.transaction_date !== initialValues.transaction_date ||
+    values.transaction_detail !== initialValues.transaction_detail ||
+    moneyToCents(values.amount) !== moneyToCents(initialValues.amount) ||
+    values.direction !== initialValues.direction ||
+    values.normalized_name !== initialValues.normalized_name ||
+    values.transaction_type !== initialValues.transaction_type ||
+    values.main_category !== initialValues.main_category ||
+    values.subcategory !== initialValues.subcategory
+  );
+}
+
+function transactionPayloadChanges(
+  transaction: StatementTransaction,
+  values: InlineTransactionEditValues,
+): TransactionPayload {
+  const payload: TransactionPayload = {};
+  if (values.transaction_date !== transaction.transaction_date) {
+    payload.transaction_date = values.transaction_date;
+  }
+  if (values.transaction_detail.trim() !== transaction.transaction_detail) {
+    payload.transaction_detail = values.transaction_detail.trim();
+  }
+  if (moneyToCents(values.amount) !== moneyToCents(transaction.amount)) {
+    payload.amount = values.amount.trim();
+  }
+  if (values.direction !== transaction.direction) {
+    payload.direction = values.direction;
+  }
+  return payload;
+}
+
+function hasPayloadChanges(payload: TransactionPayload): boolean {
+  return (
+    payload.transaction_date !== undefined ||
+    payload.transaction_detail !== undefined ||
+    payload.amount !== undefined ||
+    payload.direction !== undefined
+  );
 }
 
 function transactionMatchesNormalizationFilter(
@@ -1809,6 +1852,7 @@ export default function App() {
               locationPath={selectedLocationPath}
               onAttentionRefresh={refreshAttention}
               onAttentionTargetConsumed={() => setAttentionFocusTarget(null)}
+              onTreeRefresh={loadTree}
             />
           ) : (
             <FolderDetails
@@ -2067,12 +2111,14 @@ function FileDetails({
   locationPath,
   onAttentionRefresh,
   onAttentionTargetConsumed,
+  onTreeRefresh,
 }: {
   attentionTarget: AttentionFocusTarget | null;
   file: StoredFile;
   locationPath: string;
   onAttentionRefresh: () => Promise<void>;
   onAttentionTargetConsumed: () => void;
+  onTreeRefresh: () => Promise<void>;
 }) {
   const isPdf = fileCanPreview(file) === "pdf";
   const [statement, setStatement] = useState<StatementDetection | null>(null);
@@ -2083,11 +2129,9 @@ function FileDetails({
   const [transactions, setTransactions] = useState<StatementTransaction[]>([]);
   const [isTransactionsLoading, setIsTransactionsLoading] = useState(false);
   const [hasLoadedTransactions, setHasLoadedTransactions] = useState(false);
-  const [isExtractingTransactions, setIsExtractingTransactions] = useState(false);
-  const [isNormalizingTransactions, setIsNormalizingTransactions] = useState(false);
-  const [isClassifyingTransactionTypes, setIsClassifyingTransactionTypes] = useState(false);
-  const [isCategorizingTransactions, setIsCategorizingTransactions] = useState(false);
   const [transactionError, setTransactionError] = useState("");
+  const [analysisSteps, setAnalysisSteps] = useState<AnalysisStep[]>([]);
+  const [analysisNotice, setAnalysisNotice] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2166,10 +2210,30 @@ function FileDetails({
   async function handleAnalyzeStatement() {
     setIsAnalyzing(true);
     setStatementError("");
+    setTransactionError("");
+    setAnalysisNotice("");
+    setAnalysisSteps(initialAnalyzeSteps());
     try {
-      const nextStatement = await detectStatement(file.id);
-      setStatement(nextStatement);
+      const response = await analyzeStatementFile(file.id);
+      setStatement(response.statement);
+      setLatestExtraction(response.extraction);
+      setTransactions(response.transactions);
+      setHasLoadedTransactions(true);
+      setAnalysisSteps(response.steps);
+      if (response.status === "FAILED") {
+        const failed = response.steps.find((step) => step.key === response.failed_step);
+        setStatementError(
+          `Analysis could not be completed. Failed step: ${failed?.label ?? response.failed_step ?? "Unknown"}.`,
+        );
+      } else if (response.retention.removed_count > 0) {
+        setAnalysisNotice(
+          `Analysis complete. ${labelFor(institutionLabels, response.retention.institution)} keeps the 5 most recent statement files. ${response.retention.removed_count} older source file${response.retention.removed_count === 1 ? " was" : "s were"} removed.`,
+        );
+      } else {
+        setAnalysisNotice("Analysis complete.");
+      }
       await onAttentionRefresh();
+      await onTreeRefresh();
     } catch (caught) {
       setStatementError(caught instanceof Error ? caught.message : "Unable to analyze this file.");
     } finally {
@@ -2182,75 +2246,6 @@ function FileDetails({
     const nextStatement = await updateStatementForFile(file.id, payload);
     setStatement(nextStatement);
     await onAttentionRefresh();
-  }
-
-  async function handleExtractTransactions() {
-    if (!statement) {
-      return;
-    }
-    setIsExtractingTransactions(true);
-    setTransactionError("");
-    try {
-      const response = await extractTransactions(statement.id);
-      setLatestExtraction(response.extraction);
-      setTransactions(response.transactions);
-      await onAttentionRefresh();
-    } catch (caught) {
-      setTransactionError(caught instanceof Error ? caught.message : "Unable to extract transactions.");
-    } finally {
-      setIsExtractingTransactions(false);
-    }
-  }
-
-  async function handleNormalizeTransactions() {
-    if (!statement) {
-      return;
-    }
-    setIsNormalizingTransactions(true);
-    setTransactionError("");
-    try {
-      const response = await normalizeTransactions(statement.id);
-      setTransactions(response.transactions);
-      await onAttentionRefresh();
-    } catch (caught) {
-      setTransactionError(caught instanceof Error ? caught.message : "Unable to normalize transactions.");
-    } finally {
-      setIsNormalizingTransactions(false);
-    }
-  }
-
-  async function handleClassifyTransactionTypes() {
-    if (!statement) {
-      return;
-    }
-    setIsClassifyingTransactionTypes(true);
-    setTransactionError("");
-    try {
-      const response = await classifyTransactionTypes(statement.id);
-      setTransactions(response.transactions);
-      await onAttentionRefresh();
-    } catch (caught) {
-      setTransactionError(caught instanceof Error ? caught.message : "Unable to classify transaction types.");
-    } finally {
-      setIsClassifyingTransactionTypes(false);
-    }
-  }
-
-  async function handleCategorizeTransactions() {
-    if (!statement) {
-      return;
-    }
-    setIsCategorizingTransactions(true);
-    setTransactionError("");
-    try {
-      const response = await categorizeTransactions(statement.id);
-      setTransactions(response.transactions);
-      await onAttentionRefresh();
-    } catch (caught) {
-      setTransactionError(caught instanceof Error ? caught.message : "Unable to categorize transactions.");
-    } finally {
-      setIsCategorizingTransactions(false);
-    }
   }
 
   async function handleCreateTransaction(payload: Required<TransactionPayload>) {
@@ -2312,17 +2307,6 @@ function FileDetails({
   ): Promise<StatementTransaction> {
     setTransactionError("");
     const transaction = await updateTransactionInclusion(transactionId, payload);
-    setTransactions((current) => replaceTransactionInList(current, transaction));
-    await onAttentionRefresh();
-    return transaction;
-  }
-
-  async function handleUpdateTransactionReview(
-    transactionId: number,
-    payload: TransactionReviewPayload,
-  ): Promise<StatementTransaction> {
-    setTransactionError("");
-    const transaction = await updateTransactionReview(transactionId, payload);
     setTransactions((current) => replaceTransactionInList(current, transaction));
     await onAttentionRefresh();
     return transaction;
@@ -2419,6 +2403,8 @@ function FileDetails({
       <PreviewPane file={file} />
       {isPdf || statement ? (
         <StatementPanel
+          analysisNotice={analysisNotice}
+          analysisSteps={analysisSteps}
           attentionTarget={
             attentionTarget?.targetSection === "statement" &&
             attentionTarget.targetField !== "transaction_list_review"
@@ -2437,28 +2423,20 @@ function FileDetails({
       {statement ? (
         <TransactionPanel
           error={transactionError}
-          isCategorizing={isCategorizingTransactions}
-          isClassifyingTypes={isClassifyingTransactionTypes}
-          isExtracting={isExtractingTransactions}
+          isAnalyzing={isAnalyzing}
           isLoading={isTransactionsLoading}
-          isNormalizing={isNormalizingTransactions}
           latestExtraction={latestExtraction}
           onAdd={handleCreateTransaction}
           onBulkEditTypes={handleBulkUpdateTransactionTypes}
           onBulkEditCategories={handleBulkUpdateTransactionCategories}
-          onCategorize={handleCategorizeTransactions}
-          onClassifyTypes={handleClassifyTransactionTypes}
           onEdit={handleUpdateTransaction}
           onEditNormalization={handleUpdateTransactionNormalization}
           onEditCategory={handleUpdateTransactionCategory}
           onEditInclusion={handleUpdateTransactionInclusion}
-          onEditReview={handleUpdateTransactionReview}
           onEditType={handleUpdateTransactionType}
           onExclude={handleExcludeTransaction}
-          onExtract={handleExtractTransactions}
           onBulkEditInclusion={handleBulkUpdateTransactionInclusion}
           onBulkEditReview={handleBulkUpdateTransactionReview}
-          onNormalize={handleNormalizeTransactions}
           onTransactionsUpdate={(updater) => setTransactions((current) => updater(current))}
           attentionTarget={
             hasLoadedTransactions &&
@@ -2482,6 +2460,8 @@ function FileDetails({
 }
 
 function StatementPanel({
+  analysisNotice,
+  analysisSteps,
   attentionTarget,
   error,
   isAnalyzing,
@@ -2491,6 +2471,8 @@ function StatementPanel({
   onSave,
   statement,
 }: {
+  analysisNotice: string;
+  analysisSteps: AnalysisStep[];
   attentionTarget: AttentionFocusTarget | null;
   error: string;
   isAnalyzing: boolean;
@@ -2506,7 +2488,7 @@ function StatementPanel({
   const [editError, setEditError] = useState("");
   const [activeAttentionField, setActiveAttentionField] = useState<string | null>(null);
   const handledAttentionRef = useRef("");
-  const buttonText = statement ? "Re-analyze" : "Analyze File";
+  const buttonText = statement ? "Analyze Again" : "Analyze";
   const statusText = statement ? labelFor(detectionStatusLabels, statement.detection_status) : "Not Analyzed";
   const subtitle = statement?.metadata_source === "USER_EDITED" ? `${statusText} - User edited` : statusText;
   const isBusy = isAnalyzing || isLoading || isSaving;
@@ -2657,9 +2639,21 @@ function StatementPanel({
       </div>
 
       {isLoading ? <div className="statement-state">Loading statement information...</div> : null}
-      {isAnalyzing ? <div className="statement-state">Analyzing document...</div> : null}
+      {isAnalyzing ? <div className="statement-state">Analyzing statement...</div> : null}
       {error ? <div className="statement-state statement-state--error">{error}</div> : null}
       {editError ? <div className="statement-state statement-state--error">{editError}</div> : null}
+      {analysisNotice ? <div className="statement-state">{analysisNotice}</div> : null}
+      {analysisSteps.length > 0 ? (
+        <ol className="analysis-progress" aria-label="Analysis progress">
+          {analysisSteps.map((step) => (
+            <li className={`analysis-progress__item analysis-progress__item--${step.status.toLowerCase()}`} key={step.key}>
+              <span aria-hidden="true">{analysisStepMarker(step.status)}</span>
+              <span>{step.label}</span>
+              {step.message ? <span className="analysis-progress__message">{step.message}</span> : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
 
       {!isLoading && !statement && !error ? (
         <div className="statement-state">No statement analysis yet.</div>
@@ -2829,28 +2823,20 @@ function StatementPanel({
 function TransactionPanel({
   attentionTarget,
   error,
-  isCategorizing,
-  isClassifyingTypes,
-  isExtracting,
+  isAnalyzing,
   isLoading,
-  isNormalizing,
   latestExtraction,
   onAdd,
   onBulkEditCategories,
   onBulkEditInclusion,
   onBulkEditReview,
   onBulkEditTypes,
-  onCategorize,
-  onClassifyTypes,
   onEdit,
   onEditCategory,
   onEditInclusion,
   onEditNormalization,
-  onEditReview,
   onEditType,
   onExclude,
-  onExtract,
-  onNormalize,
   onTransactionsUpdate,
   onAttentionRefresh,
   onAttentionTargetConsumed,
@@ -2858,28 +2844,20 @@ function TransactionPanel({
 }: {
   attentionTarget: AttentionFocusTarget | null;
   error: string;
-  isCategorizing: boolean;
-  isClassifyingTypes: boolean;
-  isExtracting: boolean;
+  isAnalyzing: boolean;
   isLoading: boolean;
-  isNormalizing: boolean;
   latestExtraction: TransactionExtraction | null;
   onAdd: (payload: Required<TransactionPayload>) => Promise<void>;
   onBulkEditCategories: (payload: TransactionCategoryBulkPayload) => Promise<number[]>;
   onBulkEditInclusion: (payload: TransactionInclusionBulkPayload) => Promise<number[]>;
   onBulkEditReview: (payload: TransactionReviewBulkPayload) => Promise<number[]>;
   onBulkEditTypes: (payload: TransactionTypeBulkPayload) => Promise<number[]>;
-  onCategorize: () => void;
-  onClassifyTypes: () => void;
   onEdit: (transactionId: number, payload: TransactionPayload) => Promise<void>;
   onEditCategory: (transactionId: number, payload: TransactionCategoryPayload) => Promise<void>;
   onEditInclusion: (transactionId: number, payload: TransactionInclusionPayload) => Promise<StatementTransaction>;
   onEditNormalization: (transactionId: number, payload: TransactionNormalizationPayload) => Promise<void>;
-  onEditReview: (transactionId: number, payload: TransactionReviewPayload) => Promise<StatementTransaction>;
   onEditType: (transactionId: number, payload: TransactionTypePayload) => Promise<void>;
   onExclude: (transactionId: number) => Promise<void>;
-  onExtract: () => void;
-  onNormalize: () => void;
   onTransactionsUpdate: (updater: (current: StatementTransaction[]) => StatementTransaction[]) => void;
   onAttentionRefresh: () => Promise<void>;
   onAttentionTargetConsumed: () => void;
@@ -2891,30 +2869,8 @@ function TransactionPanel({
   const [formValues, setFormValues] = useState<TransactionFormValues>(emptyTransactionFormValues);
   const [formError, setFormError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [normalizationDialogState, setNormalizationDialogState] = useState<NormalizationDialogState>(null);
-  const [normalizationFormValues, setNormalizationFormValues] = useState<NormalizationFormValues>({
-    normalized_name: "",
-    use_for_future: false,
-  });
-  const [normalizationFormError, setNormalizationFormError] = useState("");
-  const [isSavingNormalization, setIsSavingNormalization] = useState(false);
   const [normalizationFilter, setNormalizationFilter] = useState<NormalizationFilter>("all");
-  const [typeDialogState, setTypeDialogState] = useState<TypeDialogState>(null);
-  const [typeFormValues, setTypeFormValues] = useState<TypeFormValues>({
-    transaction_type: "UNKNOWN",
-    use_for_future: false,
-  });
-  const [typeFormError, setTypeFormError] = useState("");
-  const [isSavingType, setIsSavingType] = useState(false);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
-  const [categoryDialogState, setCategoryDialogState] = useState<CategoryDialogState>(null);
-  const [categoryFormValues, setCategoryFormValues] = useState<CategoryFormValues>({
-    main_category: "PERSONAL_INTERNAL",
-    subcategory: "UNCATEGORIZED",
-    use_for_future: false,
-  });
-  const [categoryFormError, setCategoryFormError] = useState("");
-  const [isSavingCategory, setIsSavingCategory] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [inclusionFilter, setInclusionFilter] = useState<InclusionFilter>("all");
   const [selectedTransactionIds, setSelectedTransactionIds] = useState<Set<number>>(new Set());
@@ -2938,9 +2894,12 @@ function TransactionPanel({
   const [inclusionError, setInclusionError] = useState("");
   const [inclusionNotice, setInclusionNotice] = useState("");
   const [savingInclusionIds, setSavingInclusionIds] = useState<Set<number>>(new Set());
-  const [savingReviewIds, setSavingReviewIds] = useState<Set<number>>(new Set());
   const [transactionSearch, setTransactionSearch] = useState("");
   const [activeAttentionFocus, setActiveAttentionFocus] = useState<ActiveAttentionFocus | null>(null);
+  const [editingTransactionId, setEditingTransactionId] = useState<number | null>(null);
+  const [inlineEditValues, setInlineEditValues] = useState<InlineTransactionEditValues | null>(null);
+  const [inlineEditError, setInlineEditError] = useState("");
+  const [isSavingInlineEdit, setIsSavingInlineEdit] = useState(false);
   const bulkHeaderCheckboxRef = useRef<HTMLInputElement>(null);
   const inclusionHeaderCheckboxRef = useRef<HTMLInputElement>(null);
   const inclusionRequestVersions = useRef<Map<number, number>>(new Map());
@@ -2964,31 +2923,7 @@ function TransactionPanel({
       .filter((transaction) => activeTransactionIds.includes(transaction.id))
       .every((transaction) => transactionReviewStatus(transaction) === "REVIEWED");
   const selectedTotalCents = selectedAmountCents(transactions);
-  const hasExtraction = latestExtraction !== null;
-  const extractButtonText = hasExtraction ? "Re-extract Transactions" : "Extract Transactions";
-  const hasNormalization = transactions.some(
-    (transaction) =>
-      transaction.normalized_name ||
-      transaction.normalized_at ||
-      transactionNormalizationStatus(transaction) !== "NOT_NORMALIZED",
-  );
-  const normalizeButtonText = hasNormalization ? "Re-normalize" : "Normalize Transactions";
-  const hasTypeClassification = transactions.some(
-    (transaction) =>
-      transaction.type_updated_at ||
-      transactionTypeStatus(transaction) !== "NOT_CLASSIFIED" ||
-      transactionTypeValue(transaction) !== "UNKNOWN",
-  );
-  const classifyButtonText = hasTypeClassification ? "Reclassify Types" : "Classify Types";
-  const hasCategorization = transactions.some(
-    (transaction) =>
-      transaction.category_updated_at ||
-      categoryStatus(transaction) !== "NOT_CATEGORIZED" ||
-      transaction.main_category ||
-      transaction.subcategory,
-  );
-  const categorizeButtonText = hasCategorization ? "Re-categorize" : "Categorize Transactions";
-  const isActionBusy = isExtracting || isLoading || isNormalizing || isClassifyingTypes || isCategorizing;
+  const isActionBusy = isAnalyzing || isLoading;
   const selectedIds = useMemo(() => Array.from(selectedTransactionIds), [selectedTransactionIds]);
   const visibleTransactions = useMemo(() => {
     return transactions.filter(
@@ -3039,6 +2974,46 @@ function TransactionPanel({
   const visibleIncludedCount = sortedTransactions.filter(transactionIncluded).length;
   const allVisibleIncluded = sortedTransactions.length > 0 && visibleIncludedCount === sortedTransactions.length;
   const someVisibleIncluded = visibleIncludedCount > 0 && visibleIncludedCount < sortedTransactions.length;
+  const editingTransaction = useMemo(
+    () => transactions.find((transaction) => transaction.id === editingTransactionId) ?? null,
+    [editingTransactionId, transactions],
+  );
+  const hasUnsavedInlineEdit = useCallback(() => {
+    if (!editingTransaction || !inlineEditValues) {
+      return false;
+    }
+    return inlineTransactionEditIsDirty(editingTransaction, inlineEditValues);
+  }, [editingTransaction, inlineEditValues]);
+  const startInlineEdit = useCallback(
+    (transaction: StatementTransaction, targetField: string | null = null, preserveAttention = false) => {
+      if (
+        editingTransactionId !== null &&
+        editingTransactionId !== transaction.id &&
+        hasUnsavedInlineEdit() &&
+        !window.confirm("You have unsaved changes. Discard changes and edit another transaction?")
+      ) {
+        return;
+      }
+      if (!preserveAttention) {
+        setActiveAttentionFocus(null);
+      }
+      setEditingTransactionId(transaction.id);
+      setInlineEditValues(inlineEditValuesFromTransaction(transaction));
+      setInlineEditError("");
+      if (targetField) {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            document
+              .querySelector<HTMLElement>(
+                `[data-transaction-id="${transaction.id}"] [data-attention-field="${targetField}"]`,
+              )
+              ?.focus({ preventScroll: true });
+          });
+        });
+      }
+    },
+    [editingTransactionId, hasUnsavedInlineEdit],
+  );
 
   useEffect(() => {
     if (bulkHeaderCheckboxRef.current) {
@@ -3060,6 +3035,14 @@ function TransactionPanel({
       return next.size === current.size ? current : next;
     });
   }, [transactions]);
+
+  useEffect(() => {
+    if (editingTransactionId !== null && !transactions.some((transaction) => transaction.id === editingTransactionId)) {
+      setEditingTransactionId(null);
+      setInlineEditValues(null);
+      setInlineEditError("");
+    }
+  }, [editingTransactionId, transactions]);
 
   useEffect(() => {
     if (!attentionTarget) {
@@ -3098,30 +3081,8 @@ function TransactionPanel({
     setCategoryFilter("all");
     setInclusionFilter("all");
     setActiveAttentionFocus({ ...attentionTarget, targetField, softened: false });
-
-    if (targetField === "normalized_name") {
-      setNormalizationDialogState({ transaction: targetTransaction });
-      setNormalizationFormValues(normalizationToFormValues(targetTransaction));
-      setNormalizationFormError("");
-      return;
-    }
-    if (targetField === "transaction_type") {
-      setTypeDialogState({ transaction: targetTransaction });
-      setTypeFormValues(typeToFormValues(targetTransaction));
-      setTypeFormError("");
-      return;
-    }
-    if (targetField === "main_category" || targetField === "subcategory") {
-      setCategoryDialogState({ transaction: targetTransaction });
-      setCategoryFormValues(categoryToFormValues(targetTransaction));
-      setCategoryFormError("");
-      return;
-    }
-
-    setDialogState({ mode: "edit", transaction: targetTransaction });
-    setFormValues(transactionToFormValues(targetTransaction));
-    setFormError("");
-  }, [attentionTarget, isLoading, onAttentionRefresh, onAttentionTargetConsumed, transactions]);
+    startInlineEdit(targetTransaction, targetField, true);
+  }, [attentionTarget, isLoading, onAttentionRefresh, onAttentionTargetConsumed, startInlineEdit, transactions]);
 
   const activeAttentionTransactionId = activeAttentionFocus?.transactionId ?? null;
   const activeAttentionRequestedAt = activeAttentionFocus?.requestedAt ?? null;
@@ -3166,8 +3127,8 @@ function TransactionPanel({
             behavior: prefersReducedMotion ? "auto" : "smooth",
           });
         }
-        document
-          .querySelector<HTMLElement>(`.transaction-dialog [data-attention-field="${targetField}"]`)
+        row
+          ?.querySelector<HTMLElement>(`[data-attention-field="${targetField}"]`)
           ?.focus({ preventScroll: true });
       });
     });
@@ -3193,13 +3154,6 @@ function TransactionPanel({
     setFormError("");
   }
 
-  function openEditDialog(transaction: StatementTransaction) {
-    setActiveAttentionFocus(null);
-    setDialogState({ mode: "edit", transaction });
-    setFormValues(transactionToFormValues(transaction));
-    setFormError("");
-  }
-
   function closeDialog() {
     setDialogState(null);
     setFormValues(emptyTransactionFormValues());
@@ -3207,76 +3161,105 @@ function TransactionPanel({
     setActiveAttentionFocus(null);
   }
 
-  function openNormalizationDialog(transaction: StatementTransaction) {
-    setActiveAttentionFocus(null);
-    setNormalizationDialogState({ transaction });
-    setNormalizationFormValues(normalizationToFormValues(transaction));
-    setNormalizationFormError("");
-  }
-
-  function closeNormalizationDialog() {
-    setNormalizationDialogState(null);
-    setNormalizationFormValues({ normalized_name: "", use_for_future: false });
-    setNormalizationFormError("");
+  function cancelInlineEdit() {
+    setEditingTransactionId(null);
+    setInlineEditValues(null);
+    setInlineEditError("");
     setActiveAttentionFocus(null);
   }
 
-  function openTypeDialog(transaction: StatementTransaction) {
-    setActiveAttentionFocus(null);
-    setTypeDialogState({ transaction });
-    setTypeFormValues(typeToFormValues(transaction));
-    setTypeFormError("");
-  }
-
-  function closeTypeDialog() {
-    setTypeDialogState(null);
-    setTypeFormValues({ transaction_type: "UNKNOWN", use_for_future: false });
-    setTypeFormError("");
-    setActiveAttentionFocus(null);
-  }
-
-  function openCategoryDialog(transaction: StatementTransaction) {
-    setActiveAttentionFocus(null);
-    setCategoryDialogState({ transaction });
-    setCategoryFormValues(categoryToFormValues(transaction));
-    setCategoryFormError("");
-  }
-
-  function closeCategoryDialog() {
-    setCategoryDialogState(null);
-    setCategoryFormValues({
-      main_category: "PERSONAL_INTERNAL",
-      subcategory: "UNCATEGORIZED",
-      use_for_future: false,
+  function updateInlineEditValue<K extends keyof InlineTransactionEditValues>(
+    field: K,
+    value: InlineTransactionEditValues[K],
+  ) {
+    setInlineEditValues((current) => {
+      if (!current) {
+        return current;
+      }
+      if (field === "main_category" && typeof value === "string" && isCategoryMainValue(value)) {
+        return {
+          ...current,
+          main_category: value,
+          subcategory: defaultSubcategoryFor(value),
+        };
+      }
+      return { ...current, [field]: value };
     });
-    setCategoryFormError("");
-    setActiveAttentionFocus(null);
+    setInlineEditError("");
+  }
+
+  async function handleSaveInlineEdit(transaction: StatementTransaction) {
+    if (!inlineEditValues || editingTransactionId !== transaction.id) {
+      return;
+    }
+
+    const validationMessage = validateInlineTransactionEdit(inlineEditValues, transaction);
+    if (validationMessage) {
+      setInlineEditError(validationMessage);
+      return;
+    }
+
+    const initialValues = inlineEditValuesFromTransaction(transaction);
+    const corePayload = transactionPayloadChanges(transaction, inlineEditValues);
+    const normalizedNameChanged = inlineEditValues.normalized_name !== initialValues.normalized_name;
+    const typeChanged = inlineEditValues.transaction_type !== initialValues.transaction_type;
+    const categoryChanged =
+      inlineEditValues.main_category !== initialValues.main_category ||
+      inlineEditValues.subcategory !== initialValues.subcategory;
+    const categoryEditable = transactionCategoryEditable(inlineEditValues.transaction_type, inlineEditValues.direction);
+    const upstreamTypeResetPossible =
+      normalizedNameChanged ||
+      corePayload.transaction_detail !== undefined ||
+      corePayload.direction !== undefined;
+    const shouldSaveType =
+      typeChanged ||
+      (upstreamTypeResetPossible && inlineEditValues.transaction_type !== "UNKNOWN");
+
+    if (
+      !hasPayloadChanges(corePayload) &&
+      !normalizedNameChanged &&
+      !shouldSaveType &&
+      !(categoryEditable && categoryChanged)
+    ) {
+      cancelInlineEdit();
+      return;
+    }
+
+    setIsSavingInlineEdit(true);
+    setInlineEditError("");
+    try {
+      if (hasPayloadChanges(corePayload)) {
+        await onEdit(transaction.id, corePayload);
+      }
+      if (normalizedNameChanged) {
+        await onEditNormalization(transaction.id, {
+          normalized_name: inlineEditValues.normalized_name.trim().replace(/\s+/g, " "),
+          use_for_future: false,
+        });
+      }
+      if (shouldSaveType) {
+        await onEditType(transaction.id, {
+          transaction_type: inlineEditValues.transaction_type,
+          use_for_future: false,
+        });
+      }
+      if (categoryEditable && categoryChanged) {
+        await onEditCategory(transaction.id, {
+          main_category: inlineEditValues.main_category,
+          subcategory: inlineEditValues.subcategory,
+          use_for_future: false,
+        });
+      }
+      cancelInlineEdit();
+    } catch (caught) {
+      setInlineEditError(caught instanceof Error ? caught.message : "Transaction could not be saved.");
+    } finally {
+      setIsSavingInlineEdit(false);
+    }
   }
 
   function updateFormValue(field: keyof TransactionFormValues, value: string) {
     setFormValues((current) => ({ ...current, [field]: value }));
-  }
-
-  function updateNormalizationFormValue(field: "normalized_name", value: string): void;
-  function updateNormalizationFormValue(field: "use_for_future", value: boolean): void;
-  function updateNormalizationFormValue(field: keyof NormalizationFormValues, value: string | boolean) {
-    if (field === "normalized_name" && typeof value === "string") {
-      setNormalizationFormValues((current) => ({ ...current, normalized_name: value }));
-    }
-    if (field === "use_for_future" && typeof value === "boolean") {
-      setNormalizationFormValues((current) => ({ ...current, use_for_future: value }));
-    }
-  }
-
-  function updateTypeFormValue(field: "transaction_type", value: TransactionTypeValue): void;
-  function updateTypeFormValue(field: "use_for_future", value: boolean): void;
-  function updateTypeFormValue(field: keyof TypeFormValues, value: TransactionTypeValue | boolean) {
-    if (field === "transaction_type" && typeof value === "string") {
-      setTypeFormValues((current) => ({ ...current, transaction_type: value }));
-    }
-    if (field === "use_for_future" && typeof value === "boolean") {
-      setTypeFormValues((current) => ({ ...current, use_for_future: value }));
-    }
   }
 
   function updateBulkTypeFormValue(field: "transaction_type", value: TransactionTypeValue): void;
@@ -3287,25 +3270,6 @@ function TransactionPanel({
     }
     if (field === "overwrite_user_edits" && typeof value === "boolean") {
       setBulkTypeFormValues((current) => ({ ...current, overwrite_user_edits: value }));
-    }
-  }
-
-  function updateCategoryFormValue(field: "main_category", value: CategoryMainValue): void;
-  function updateCategoryFormValue(field: "subcategory", value: CategorySubcategoryValue): void;
-  function updateCategoryFormValue(field: "use_for_future", value: boolean): void;
-  function updateCategoryFormValue(field: keyof CategoryFormValues, value: CategoryMainValue | CategorySubcategoryValue | boolean) {
-    if (field === "main_category" && typeof value === "string" && isCategoryMainValue(value)) {
-      setCategoryFormValues((current) => ({
-        ...current,
-        main_category: value,
-        subcategory: defaultSubcategoryFor(value),
-      }));
-    }
-    if (field === "subcategory" && typeof value === "string" && isCategorySubcategoryValue(value)) {
-      setCategoryFormValues((current) => ({ ...current, subcategory: value }));
-    }
-    if (field === "use_for_future" && typeof value === "boolean") {
-      setCategoryFormValues((current) => ({ ...current, use_for_future: value }));
     }
   }
 
@@ -3461,23 +3425,6 @@ function TransactionPanel({
     }
   }
 
-  async function handleMarkReviewed(transaction: StatementTransaction) {
-    setInclusionError("");
-    setInclusionNotice("");
-    setSavingReviewIds((current) => new Set(current).add(transaction.id));
-    try {
-      await onEditReview(transaction.id, { review_status: "REVIEWED" });
-    } catch (caught) {
-      setInclusionError(caught instanceof Error ? caught.message : "Could not save review status.");
-    } finally {
-      setSavingReviewIds((current) => {
-        const next = new Set(current);
-        next.delete(transaction.id);
-        return next;
-      });
-    }
-  }
-
   function clearAttentionFocusOnInteraction() {
     if (activeAttentionFocus?.softened) {
       setActiveAttentionFocus(null);
@@ -3536,91 +3483,12 @@ function TransactionPanel({
     setFormError("");
     try {
       const payload = transactionPayloadFromValues(formValues);
-      if (dialogState?.mode === "edit") {
-        await onEdit(dialogState.transaction.id, payload);
-      } else {
-        await onAdd(payload);
-      }
+      await onAdd(payload);
       closeDialog();
     } catch (caught) {
       setFormError(caught instanceof Error ? caught.message : "Transaction could not be saved.");
     } finally {
       setIsSaving(false);
-    }
-  }
-
-  async function handleSubmitNormalization(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!normalizationDialogState) {
-      return;
-    }
-
-    const validationMessage = validateNormalizationForm(normalizationFormValues);
-    if (validationMessage) {
-      setNormalizationFormError(validationMessage);
-      return;
-    }
-
-    setIsSavingNormalization(true);
-    setNormalizationFormError("");
-    try {
-      await onEditNormalization(
-        normalizationDialogState.transaction.id,
-        normalizationPayloadFromValues(normalizationFormValues),
-      );
-      closeNormalizationDialog();
-    } catch (caught) {
-      setNormalizationFormError(caught instanceof Error ? caught.message : "Name could not be saved.");
-    } finally {
-      setIsSavingNormalization(false);
-    }
-  }
-
-  async function handleSubmitType(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!typeDialogState) {
-      return;
-    }
-
-    const validationMessage = validateTypeForm(typeFormValues);
-    if (validationMessage) {
-      setTypeFormError(validationMessage);
-      return;
-    }
-
-    setIsSavingType(true);
-    setTypeFormError("");
-    try {
-      await onEditType(typeDialogState.transaction.id, typePayloadFromValues(typeFormValues));
-      closeTypeDialog();
-    } catch (caught) {
-      setTypeFormError(caught instanceof Error ? caught.message : "Type could not be saved.");
-    } finally {
-      setIsSavingType(false);
-    }
-  }
-
-  async function handleSubmitCategory(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!categoryDialogState) {
-      return;
-    }
-
-    const validationMessage = validateCategoryForm(categoryFormValues);
-    if (validationMessage) {
-      setCategoryFormError(validationMessage);
-      return;
-    }
-
-    setIsSavingCategory(true);
-    setCategoryFormError("");
-    try {
-      await onEditCategory(categoryDialogState.transaction.id, categoryPayloadFromValues(categoryFormValues));
-      closeCategoryDialog();
-    } catch (caught) {
-      setCategoryFormError(caught instanceof Error ? caught.message : "Category could not be saved.");
-    } finally {
-      setIsSavingCategory(false);
     }
   }
 
@@ -3706,30 +3574,6 @@ function TransactionPanel({
           </p>
         </div>
         <div className="transactions-actions">
-          <button disabled={isActionBusy} onClick={onExtract} type="button">
-            {isExtracting ? "Extracting..." : extractButtonText}
-          </button>
-          <button
-            disabled={isActionBusy || transactions.length === 0}
-            onClick={onNormalize}
-            type="button"
-          >
-            {isNormalizing ? "Normalizing..." : normalizeButtonText}
-          </button>
-          <button
-            disabled={isActionBusy || transactions.length === 0}
-            onClick={onClassifyTypes}
-            type="button"
-          >
-            {isClassifyingTypes ? "Classifying..." : classifyButtonText}
-          </button>
-          <button
-            disabled={isActionBusy || transactions.length === 0}
-            onClick={onCategorize}
-            type="button"
-          >
-            {isCategorizing ? "Categorizing..." : categorizeButtonText}
-          </button>
           <button
             aria-label="Mark this bank statement transaction list reviewed"
             className={[
@@ -3765,10 +3609,7 @@ function TransactionPanel({
         </div>
       ) : null}
       {isLoading ? <div className="transaction-state">Loading transactions...</div> : null}
-      {isExtracting ? <div className="transaction-state">Extracting transactions...</div> : null}
-      {isNormalizing ? <div className="transaction-state">Normalizing transactions...</div> : null}
-      {isClassifyingTypes ? <div className="transaction-state">Classifying transaction types...</div> : null}
-      {isCategorizing ? <div className="transaction-state">Categorizing transactions...</div> : null}
+      {isAnalyzing ? <div className="transaction-state">Analyzing statement transactions...</div> : null}
       {error ? <div className="transaction-state transaction-state--error">{error}</div> : null}
       {inclusionError ? <div className="transaction-state transaction-state--error">{inclusionError}</div> : null}
       {inclusionNotice ? <div className="transaction-state">{inclusionNotice}</div> : null}
@@ -4080,6 +3921,11 @@ function TransactionPanel({
                 const isIncluded = transactionIncluded(transaction);
                 const needsPhase8Review = transactionNeedsPhase8Review(transaction);
                 const inclusionWarning = transactionInclusionWarning(transaction);
+                const isEditing = editingTransactionId === transaction.id && inlineEditValues !== null;
+                const editValues = isEditing ? inlineEditValues : null;
+                const inlineCategoryEditable = editValues
+                  ? transactionCategoryEditable(editValues.transaction_type, editValues.direction)
+                  : false;
                 return (
                   <tr
                     key={transaction.id}
@@ -4087,8 +3933,23 @@ function TransactionPanel({
                     className={[
                       isIncluded ? "transaction-row--included" : "transaction-row--excluded",
                       needsPhase8Review ? "transaction-row--review" : "",
+                      isEditing ? "transaction-row--editing" : "",
                       attentionRowClass(transaction.id),
                     ].filter(Boolean).join(" ")}
+                    onKeyDown={(event) => {
+                      if (!isEditing) {
+                        return;
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelInlineEdit();
+                        return;
+                      }
+                      if (event.key === "Enter" && !(event.target instanceof HTMLSelectElement)) {
+                        event.preventDefault();
+                        void handleSaveInlineEdit(transaction);
+                      }
+                    }}
                   >
                     <td className="transaction-include-cell">
                       <input
@@ -4112,11 +3973,35 @@ function TransactionPanel({
                         type="checkbox"
                       />
                     </td>
-                    <td className={attentionCellClass("transaction_date")}>{formatDateOnly(transaction.transaction_date)}</td>
+                    <td className={attentionCellClass("transaction_date")}>
+                      {editValues ? (
+                        <input
+                          className="transaction-inline-input"
+                          data-attention-field="transaction_date"
+                          type="date"
+                          value={editValues.transaction_date}
+                          onChange={(event) => updateInlineEditValue("transaction_date", event.target.value)}
+                        />
+                      ) : (
+                        formatDateOnly(transaction.transaction_date)
+                      )}
+                    </td>
                     <td className={attentionCellClass("normalized_name")}>
-                      <span className={transaction.normalized_name ? "transaction-name-text" : "transaction-name-empty"}>
-                        {transaction.normalized_name ?? "Unresolved"}
-                      </span>
+                      {editValues ? (
+                        <input
+                          className="transaction-inline-input"
+                          data-attention-field="normalized_name"
+                          maxLength={255}
+                          placeholder="Unresolved"
+                          type="text"
+                          value={editValues.normalized_name}
+                          onChange={(event) => updateInlineEditValue("normalized_name", event.target.value)}
+                        />
+                      ) : (
+                        <span className={transaction.normalized_name ? "transaction-name-text" : "transaction-name-empty"}>
+                          {transaction.normalized_name ?? "Unresolved"}
+                        </span>
+                      )}
                       <span className="transaction-name-meta">
                         {labelFor(normalizationStatusLabels, transactionNormalizationStatus(transaction))} -{" "}
                         {formatConfidence(transactionNormalizationConfidence(transaction))}
@@ -4132,15 +4017,32 @@ function TransactionPanel({
                       ) : null}
                     </td>
                     <td className={attentionCellClass("transaction_type")}>
-                      <span
-                        className={
-                          transactionTypeValue(transaction) === "UNKNOWN"
-                            ? "transaction-type-empty"
-                            : "transaction-type-text"
-                        }
-                      >
-                        {labelFor(transactionTypeLabels, transactionTypeValue(transaction))}
-                      </span>
+                      {editValues ? (
+                        <select
+                          className="transaction-inline-input"
+                          data-attention-field="transaction_type"
+                          value={editValues.transaction_type}
+                          onChange={(event) =>
+                            updateInlineEditValue("transaction_type", event.target.value as TransactionTypeValue)
+                          }
+                        >
+                          {typeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span
+                          className={
+                            transactionTypeValue(transaction) === "UNKNOWN"
+                              ? "transaction-type-empty"
+                              : "transaction-type-text"
+                          }
+                        >
+                          {labelFor(transactionTypeLabels, transactionTypeValue(transaction))}
+                        </span>
+                      )}
                       <span className="transaction-type-meta">
                         {labelFor(typeStatusLabels, typeStatus)} - {formatConfidence(transactionTypeConfidence(transaction))}
                       </span>
@@ -4153,13 +4055,30 @@ function TransactionPanel({
                       {needsTypeReview ? <span className="transaction-badge">Type review</span> : null}
                     </td>
                     <td className={attentionCellClass("main_category")}>
-                      <span className={currentMainCategory ? "transaction-category-text" : "transaction-category-empty"}>
-                        {currentMainCategory
-                          ? labelFor(categoryLabels, currentMainCategory)
-                          : currentCategoryStatus === "NOT_APPLICABLE"
-                            ? "Not Applicable"
-                            : "Uncategorized"}
-                      </span>
+                      {editValues && inlineCategoryEditable ? (
+                        <select
+                          className="transaction-inline-input"
+                          data-attention-field="main_category"
+                          value={editValues.main_category}
+                          onChange={(event) =>
+                            updateInlineEditValue("main_category", event.target.value as CategoryMainValue)
+                          }
+                        >
+                          {categoryOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className={currentMainCategory ? "transaction-category-text" : "transaction-category-empty"}>
+                          {currentMainCategory
+                            ? labelFor(categoryLabels, currentMainCategory)
+                            : currentCategoryStatus === "NOT_APPLICABLE"
+                              ? "Not Applicable"
+                              : "Uncategorized"}
+                        </span>
+                      )}
                       <span className="transaction-category-meta">
                         {labelFor(categoryStatusLabels, currentCategoryStatus)} -{" "}
                         {formatConfidence(categoryConfidence(transaction))}
@@ -4171,39 +4090,101 @@ function TransactionPanel({
                       {needsCategoryReview ? <span className="transaction-badge">Category review</span> : null}
                     </td>
                     <td className={attentionCellClass("subcategory")}>
-                      <span className={currentSubcategory ? "transaction-category-text" : "transaction-category-empty"}>
-                        {currentSubcategory ? labelFor(subcategoryLabels, currentSubcategory) : "-"}
-                      </span>
+                      {editValues && inlineCategoryEditable ? (
+                        <select
+                          className="transaction-inline-input"
+                          data-attention-field="subcategory"
+                          value={editValues.subcategory}
+                          onChange={(event) =>
+                            updateInlineEditValue("subcategory", event.target.value as CategorySubcategoryValue)
+                          }
+                        >
+                          {subcategoryOptionsFor(editValues.main_category).map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className={currentSubcategory ? "transaction-category-text" : "transaction-category-empty"}>
+                          {currentSubcategory ? labelFor(subcategoryLabels, currentSubcategory) : "-"}
+                        </span>
+                      )}
                     </td>
                     <td className={attentionCellClass("transaction_detail")}>
-                      <span className="transaction-detail-text">{transaction.transaction_detail}</span>
+                      {editValues ? (
+                        <input
+                          className="transaction-inline-input"
+                          data-attention-field="transaction_detail"
+                          type="text"
+                          value={editValues.transaction_detail}
+                          onChange={(event) => updateInlineEditValue("transaction_detail", event.target.value)}
+                        />
+                      ) : (
+                        <span className="transaction-detail-text">{transaction.transaction_detail}</span>
+                      )}
                       {transaction.source_page ? (
                         <span className="transaction-source">Page {transaction.source_page}</span>
                       ) : null}
                     </td>
-                    <td className={attentionCellClass("direction")}>{labelFor(directionLabels, String(transaction.direction))}</td>
-                    <td className={attentionCellClass("amount", "transaction-table__amount")}>{formatMoney(transaction.amount)}</td>
+                    <td className={attentionCellClass("direction")}>
+                      {editValues ? (
+                        <select
+                          className="transaction-inline-input"
+                          data-attention-field="direction"
+                          value={editValues.direction}
+                          onChange={(event) =>
+                            updateInlineEditValue("direction", event.target.value as TransactionDirection)
+                          }
+                        >
+                          {transactionDirectionOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        labelFor(directionLabels, String(transaction.direction))
+                      )}
+                    </td>
+                    <td className={attentionCellClass("amount", "transaction-table__amount")}>
+                      {editValues ? (
+                        <input
+                          className="transaction-inline-input transaction-inline-input--amount"
+                          data-attention-field="amount"
+                          inputMode="decimal"
+                          type="text"
+                          value={editValues.amount}
+                          onChange={(event) => updateInlineEditValue("amount", event.target.value)}
+                        />
+                      ) : (
+                        formatMoney(transaction.amount)
+                      )}
+                    </td>
                     <td>
                       <div className="transaction-row-actions">
-                        <button onClick={() => openNormalizationDialog(transaction)} type="button">
-                          Edit Name
-                        </button>
-                        <button onClick={() => openTypeDialog(transaction)} type="button">
-                          Edit Type
-                        </button>
-                        <button
-                          disabled={currentCategoryStatus === "NOT_APPLICABLE"}
-                          onClick={() => openCategoryDialog(transaction)}
-                          type="button"
-                        >
-                          Edit Category
-                        </button>
-                        <button onClick={() => openEditDialog(transaction)} type="button">
-                          Edit
-                        </button>
-                        <button className="danger-button" onClick={() => void onExclude(transaction.id)} type="button">
-                          Exclude
-                        </button>
+                        {isEditing ? (
+                          <>
+                            <button disabled={isSavingInlineEdit} onClick={() => void handleSaveInlineEdit(transaction)} type="button">
+                              {isSavingInlineEdit ? "Saving..." : "Save"}
+                            </button>
+                            <button disabled={isSavingInlineEdit} onClick={cancelInlineEdit} type="button">
+                              Cancel
+                            </button>
+                            {inlineEditError ? (
+                              <span className="transaction-inline-error">{inlineEditError}</span>
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
+                            <button disabled={isActionBusy} onClick={() => startInlineEdit(transaction)} type="button">
+                              Edit
+                            </button>
+                            <button className="danger-button" onClick={() => void onExclude(transaction.id)} type="button">
+                              Exclude
+                            </button>
+                          </>
+                        )}
                         {!isIncluded ? <span className="transaction-badge">Excluded from summary</span> : null}
                         {transaction.user_edited ? <span className="transaction-badge">Edited</span> : null}
                         {transaction.user_added ? <span className="transaction-badge">User added</span> : null}
@@ -4221,7 +4202,7 @@ function TransactionPanel({
         <div className="modal-backdrop" role="presentation">
           <form className="transaction-dialog" onSubmit={(event) => void handleSubmitTransaction(event)}>
             <div>
-              <h3>{dialogState.mode === "edit" ? "Edit Transaction" : "Add Transaction"}</h3>
+              <h3>Add Transaction</h3>
             </div>
             {formError ? <div className="transaction-state transaction-state--error">{formError}</div> : null}
             <label className={attentionFieldClass("transaction_date")}>
@@ -4279,223 +4260,6 @@ function TransactionPanel({
         </div>
       ) : null}
 
-      {normalizationDialogState ? (
-        <div className="modal-backdrop" role="presentation">
-          <form className="transaction-dialog" onSubmit={(event) => void handleSubmitNormalization(event)}>
-            <div>
-              <h3>Edit Name</h3>
-            </div>
-            {normalizationFormError ? (
-              <div className="transaction-state transaction-state--error">{normalizationFormError}</div>
-            ) : null}
-            <label>
-              <span>Raw Transaction Detail</span>
-              <input readOnly type="text" value={normalizationDialogState.transaction.transaction_detail} />
-            </label>
-            <label className={attentionFieldClass("normalized_name")}>
-              <span>Name</span>
-              <input
-                autoFocus
-                data-attention-field="normalized_name"
-                maxLength={255}
-                type="text"
-                value={normalizationFormValues.normalized_name}
-                onChange={(event) => updateNormalizationFormValue("normalized_name", event.target.value)}
-              />
-            </label>
-            <label className="checkbox-label">
-              <input
-                checked={normalizationFormValues.use_for_future}
-                type="checkbox"
-                onChange={(event) => updateNormalizationFormValue("use_for_future", event.target.checked)}
-              />
-              <span>Use for future transactions</span>
-            </label>
-            {normalizationDialogState.transaction.original_normalized_name ? (
-              <div className="transaction-state">
-                System: {normalizationDialogState.transaction.original_normalized_name}
-              </div>
-            ) : null}
-            <div className="modal-actions">
-              <button
-                disabled={
-                  savingReviewIds.has(normalizationDialogState.transaction.id) ||
-                  transactionReviewStatus(normalizationDialogState.transaction) === "REVIEWED"
-                }
-                onClick={() => void handleMarkReviewed(normalizationDialogState.transaction).then(closeNormalizationDialog)}
-                type="button"
-              >
-                {savingReviewIds.has(normalizationDialogState.transaction.id) ? "Saving..." : "Mark Reviewed"}
-              </button>
-              <button disabled={isSavingNormalization} onClick={closeNormalizationDialog} type="button">
-                Cancel
-              </button>
-              <button disabled={isSavingNormalization} type="submit">
-                {isSavingNormalization ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </form>
-        </div>
-      ) : null}
-
-      {typeDialogState ? (
-        <div className="modal-backdrop" role="presentation">
-          <form className="transaction-dialog" onSubmit={(event) => void handleSubmitType(event)}>
-            <div>
-              <h3>Edit Type</h3>
-            </div>
-            {typeFormError ? <div className="transaction-state transaction-state--error">{typeFormError}</div> : null}
-            <label>
-              <span>Raw Transaction Detail</span>
-              <input readOnly type="text" value={typeDialogState.transaction.transaction_detail} />
-            </label>
-            <label>
-              <span>Name</span>
-              <input readOnly type="text" value={typeDialogState.transaction.normalized_name ?? "Unresolved"} />
-            </label>
-            <label className={attentionFieldClass("transaction_type")}>
-              <span>Type</span>
-              <select
-                autoFocus
-                data-attention-field="transaction_type"
-                value={typeFormValues.transaction_type}
-                onChange={(event) => updateTypeFormValue("transaction_type", event.target.value as TransactionTypeValue)}
-              >
-                {typeOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="checkbox-label">
-              <input
-                checked={typeFormValues.use_for_future}
-                type="checkbox"
-                onChange={(event) => updateTypeFormValue("use_for_future", event.target.checked)}
-              />
-              <span>Use for future transactions</span>
-            </label>
-            {typeDialogState.transaction.original_transaction_type ? (
-              <div className="transaction-state">
-                System: {labelFor(transactionTypeLabels, typeDialogState.transaction.original_transaction_type)} -{" "}
-                {formatConfidence(typeDialogState.transaction.original_type_confidence)}
-              </div>
-            ) : null}
-            <div className="modal-actions">
-              <button
-                disabled={
-                  savingReviewIds.has(typeDialogState.transaction.id) ||
-                  transactionReviewStatus(typeDialogState.transaction) === "REVIEWED"
-                }
-                onClick={() => void handleMarkReviewed(typeDialogState.transaction).then(closeTypeDialog)}
-                type="button"
-              >
-                {savingReviewIds.has(typeDialogState.transaction.id) ? "Saving..." : "Mark Reviewed"}
-              </button>
-              <button disabled={isSavingType} onClick={closeTypeDialog} type="button">
-                Cancel
-              </button>
-              <button disabled={isSavingType} type="submit">
-                {isSavingType ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </form>
-        </div>
-      ) : null}
-
-      {categoryDialogState ? (
-        <div className="modal-backdrop" role="presentation">
-          <form className="transaction-dialog" onSubmit={(event) => void handleSubmitCategory(event)}>
-            <div>
-              <h3>Edit Category</h3>
-            </div>
-            {categoryFormError ? (
-              <div className="transaction-state transaction-state--error">{categoryFormError}</div>
-            ) : null}
-            <label>
-              <span>Raw Transaction Detail</span>
-              <input readOnly type="text" value={categoryDialogState.transaction.transaction_detail} />
-            </label>
-            <label>
-              <span>Type</span>
-              <input
-                readOnly
-                type="text"
-                value={labelFor(transactionTypeLabels, transactionTypeValue(categoryDialogState.transaction))}
-              />
-            </label>
-            <label className={attentionFieldClass("main_category")}>
-              <span>Main Category</span>
-              <select
-                autoFocus
-                data-attention-field="main_category"
-                value={categoryFormValues.main_category}
-                onChange={(event) => updateCategoryFormValue("main_category", event.target.value as CategoryMainValue)}
-              >
-                {categoryOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={attentionFieldClass("subcategory")}>
-              <span>Subcategory</span>
-              <select
-                data-attention-field="subcategory"
-                value={categoryFormValues.subcategory}
-                onChange={(event) =>
-                  updateCategoryFormValue("subcategory", event.target.value as CategorySubcategoryValue)
-                }
-              >
-                {subcategoryOptionsFor(categoryFormValues.main_category).map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="checkbox-label">
-              <input
-                checked={categoryFormValues.use_for_future}
-                type="checkbox"
-                onChange={(event) => updateCategoryFormValue("use_for_future", event.target.checked)}
-              />
-              <span>Use for future transactions</span>
-            </label>
-            {categoryDialogState.transaction.original_category_status ? (
-              <div className="transaction-state">
-                System: {categoryPairLabel({
-                  ...categoryDialogState.transaction,
-                  main_category: categoryDialogState.transaction.original_main_category,
-                  subcategory: categoryDialogState.transaction.original_subcategory,
-                  category_status: categoryDialogState.transaction.original_category_status,
-                })}{" "}
-                - {formatConfidence(categoryDialogState.transaction.original_category_confidence)}
-              </div>
-            ) : null}
-            <div className="modal-actions">
-              <button
-                disabled={
-                  savingReviewIds.has(categoryDialogState.transaction.id) ||
-                  transactionReviewStatus(categoryDialogState.transaction) === "REVIEWED"
-                }
-                onClick={() => void handleMarkReviewed(categoryDialogState.transaction).then(closeCategoryDialog)}
-                type="button"
-              >
-                {savingReviewIds.has(categoryDialogState.transaction.id) ? "Saving..." : "Mark Reviewed"}
-              </button>
-              <button disabled={isSavingCategory} onClick={closeCategoryDialog} type="button">
-                Cancel
-              </button>
-              <button disabled={isSavingCategory} type="submit">
-                {isSavingCategory ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </form>
-        </div>
-      ) : null}
     </section>
   );
 }
