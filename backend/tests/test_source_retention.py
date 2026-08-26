@@ -291,3 +291,34 @@ def test_removed_source_is_hidden_from_tree_and_preview_returns_gone(client: Tes
     assert "Chase 2026-06.pdf" in root_names
     assert preview.status_code == 410
     assert download.status_code == 410
+
+
+def test_retention_cleans_existing_nine_sources_to_five_without_losing_history(client: TestClient) -> None:
+    with get_session_factory()() as session:
+        created = [
+            _create_source_statement(
+                session,
+                institution="CHASE",
+                display_name=f"Chase backlog 2026-{month:02d}.pdf",
+                statement_end_date=date(2026, month, 28),
+                created_at=datetime(2026, month, 28, tzinfo=UTC),
+            )
+            for month in range(1, 10)
+        ]
+        transaction_ids = [statement.transactions[0].id for _, statement in created]
+
+        result = apply_retention_for_institution(session, "CHASE")
+        session.expire_all()
+
+        assert result.removed_count == 4
+        assert [file.display_name for file in _available_statement_files(session, "CHASE")] == [
+            "Chase backlog 2026-05.pdf",
+            "Chase backlog 2026-06.pdf",
+            "Chase backlog 2026-07.pdf",
+            "Chase backlog 2026-08.pdf",
+            "Chase backlog 2026-09.pdf",
+        ]
+        historical_transactions = [session.get(Transaction, transaction_id) for transaction_id in transaction_ids]
+        assert all(transaction is not None for transaction in historical_transactions)
+        assert all(transaction.include_in_expenses is False for transaction in historical_transactions if transaction)
+        assert all(transaction.review_status == "REVIEWED" for transaction in historical_transactions if transaction)

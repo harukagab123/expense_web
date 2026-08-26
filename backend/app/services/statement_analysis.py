@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import logging
 
 from sqlalchemy.orm import Session
 
@@ -23,6 +24,9 @@ from app.services.transaction_extraction.base import STATUS_UNSUPPORTED as EXTRA
 from app.services.transaction_extraction.service import extract_transactions_for_statement
 from app.services.transaction_normalization.service import normalize_transactions_for_statement
 from app.services.transaction_type_detection.service import classify_transaction_types_for_statement
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,6 +66,7 @@ def analyze_statement_file(session: Session, file_id: int) -> StatementAnalysisR
     statement = detect_statement_for_file(session, file_id)
     if statement.detection_status == DETECTION_FAILED:
         _fail(steps, STEP_DETECTION, statement.detection_reason or "Statement detection failed.")
+        _skip_after_failure(steps, STEP_DETECTION)
         return _response("FAILED", STEP_DETECTION, statement, extraction, transactions, steps, retention)
     _complete(steps, STEP_DETECTION, "Statement metadata updated.")
 
@@ -74,15 +79,36 @@ def analyze_statement_file(session: Session, file_id: int) -> StatementAnalysisR
     _complete(steps, STEP_EXTRACTION, f"{len(transactions)} transactions loaded.")
 
     _start(steps, STEP_NORMALIZATION)
-    transactions = normalize_transactions_for_statement(session, statement.id)
+    try:
+        transactions = normalize_transactions_for_statement(session, statement.id)
+    except Exception:
+        session.rollback()
+        logger.exception("Statement analysis failed during normalization for statement_id=%s", statement.id)
+        _fail(steps, STEP_NORMALIZATION, "Transaction name normalization failed.")
+        _skip_after_failure(steps, STEP_NORMALIZATION)
+        return _response("FAILED", STEP_NORMALIZATION, statement, extraction, transactions, steps, retention)
     _complete(steps, STEP_NORMALIZATION, "Names normalized.")
 
     _start(steps, STEP_TYPE_CLASSIFICATION)
-    transactions = classify_transaction_types_for_statement(session, statement.id)
+    try:
+        transactions = classify_transaction_types_for_statement(session, statement.id)
+    except Exception:
+        session.rollback()
+        logger.exception("Statement analysis failed during type classification for statement_id=%s", statement.id)
+        _fail(steps, STEP_TYPE_CLASSIFICATION, "Transaction type classification failed.")
+        _skip_after_failure(steps, STEP_TYPE_CLASSIFICATION)
+        return _response("FAILED", STEP_TYPE_CLASSIFICATION, statement, extraction, transactions, steps, retention)
     _complete(steps, STEP_TYPE_CLASSIFICATION, "Transaction types classified.")
 
     _start(steps, STEP_CATEGORIZATION)
-    transactions = categorize_transactions_for_statement(session, statement.id)
+    try:
+        transactions = categorize_transactions_for_statement(session, statement.id)
+    except Exception:
+        session.rollback()
+        logger.exception("Statement analysis failed during categorization for statement_id=%s", statement.id)
+        _fail(steps, STEP_CATEGORIZATION, "Transaction categorization failed.")
+        _skip_after_failure(steps, STEP_CATEGORIZATION)
+        return _response("FAILED", STEP_CATEGORIZATION, statement, extraction, transactions, steps, retention)
     _complete(steps, STEP_CATEGORIZATION, "Eligible transactions categorized.")
 
     _start(steps, STEP_NOTIFICATION_REFRESH)
@@ -90,7 +116,13 @@ def analyze_statement_file(session: Session, file_id: int) -> StatementAnalysisR
 
     _start(steps, STEP_RETENTION)
     session.refresh(statement)
-    retention = apply_retention_for_statement(session, statement)
+    try:
+        retention = apply_retention_for_statement(session, statement)
+    except Exception:
+        session.rollback()
+        logger.exception("Statement analysis failed during source retention for statement_id=%s", statement.id)
+        _fail(steps, STEP_RETENTION, "Source file retention failed.")
+        return _response("FAILED", STEP_RETENTION, statement, extraction, transactions, steps, retention)
     if retention.removed_count:
         _complete(
             steps,

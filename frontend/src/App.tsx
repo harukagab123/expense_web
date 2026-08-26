@@ -3980,7 +3980,7 @@ function TransactionPanel({
                           data-attention-field="transaction_date"
                           type="date"
                           value={editValues.transaction_date}
-                          onChange={(event) => updateInlineEditValue("transaction_date", event.target.value)}
+                          onInput={(event) => updateInlineEditValue("transaction_date", event.currentTarget.value)}
                         />
                       ) : (
                         formatDateOnly(transaction.transaction_date)
