@@ -231,33 +231,6 @@ def transaction_attention_items(transaction: Transaction) -> list[AttentionItem]
             )
         )
 
-    if not reviewed:
-        if transaction.transaction_type == "UNKNOWN":
-            items.append(
-                _transaction_item(
-                    transaction,
-                    "TRANSACTION_TYPE_UNKNOWN",
-                    SEVERITY_REVIEW,
-                    "Unknown Transaction Type",
-                    _transaction_description(transaction),
-                    "transaction_type",
-                    "transaction_type=UNKNOWN",
-                    blocking=True,
-                )
-            )
-        elif transaction.type_status == "NEEDS_REVIEW":
-            items.append(
-                _transaction_item(
-                    transaction,
-                    "TRANSACTION_TYPE_NEEDS_REVIEW",
-                    SEVERITY_REVIEW,
-                    "Transaction Type Needs Review",
-                    _transaction_description(transaction),
-                    "transaction_type",
-                    "type_status=NEEDS_REVIEW",
-                )
-            )
-
     if not included or reviewed:
         return _dedupe(items)
 

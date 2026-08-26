@@ -116,31 +116,23 @@ def test_attention_required_lawrence_workflow_counts_resolve_without_selection_r
 
     assert initial.status_code == 200, initial.text
     payload = initial.json()
-    assert payload["total"] == 3
+    assert payload["total"] == 2
     assert {item["attention_type"] for item in payload["items"]} == {
         "BANK_STATEMENT_REVIEW_REQUIRED",
         "CATEGORY_MISSING",
-        "TRANSACTION_TYPE_UNKNOWN",
     }
-    type_item = next(item for item in payload["items"] if item["attention_type"] == "TRANSACTION_TYPE_UNKNOWN")
     category_item = next(item for item in payload["items"] if item["attention_type"] == "CATEGORY_MISSING")
     statement_review_item = next(
         item for item in payload["items"] if item["attention_type"] == "BANK_STATEMENT_REVIEW_REQUIRED"
     )
-    assert type_item["file_id"] == file["id"]
-    assert type_item["statement_id"] == statement_id
-    assert type_item["transaction_id"] == transaction_id
-    assert type_item["target_field"] == "transaction_type"
     assert category_item["target_field"] == "main_category"
     assert statement_review_item["target_section"] == "statement"
     assert statement_review_item["target_field"] == "transaction_list_review"
-    assert type_item["folder_path"] == [
+    assert category_item["folder_path"] == [
         {"id": year["id"], "name": "2026"},
         {"id": chase["id"], "name": "Chase"},
     ]
 
-    type_update = client.patch(f"/api/transactions/{transaction_id}/type", json={"transaction_type": "EXPENSE"})
-    after_type = client.get("/api/attention")
     category_update = client.patch(
         f"/api/transactions/{transaction_id}/category",
         json={"main_category": "PROFIT_LOSS_BUSINESS", "subcategory": "BUSINESS_OFFICE_EXPENSE"},
@@ -153,12 +145,6 @@ def test_attention_required_lawrence_workflow_counts_resolve_without_selection_r
     final_count = client.get("/api/attention/count")
     reloaded = client.get(f"/api/statements/{statement_id}/transactions")
 
-    assert type_update.status_code == 200, type_update.text
-    assert after_type.json()["total"] == 2
-    assert {item["attention_type"] for item in after_type.json()["items"]} == {
-        "BANK_STATEMENT_REVIEW_REQUIRED",
-        "CATEGORY_MISSING",
-    }
     assert category_update.status_code == 200, category_update.text
     assert after_category.json()["total"] == 1
     assert after_category.json()["items"][0]["attention_type"] == "BANK_STATEMENT_REVIEW_REQUIRED"
@@ -168,7 +154,7 @@ def test_attention_required_lawrence_workflow_counts_resolve_without_selection_r
     assert reloaded.json()["transactions"][0]["include_in_expenses"] is True
 
 
-def test_attention_count_combines_type_category_and_subcategory_issues(client: TestClient) -> None:
+def test_attention_count_combines_category_and_subcategory_issues(client: TestClient) -> None:
     file = upload_pdf(client, "count-test.pdf")
     statement_id = create_statement(file["id"])
     for index in range(2):
@@ -191,7 +177,7 @@ def test_attention_count_combines_type_category_and_subcategory_issues(client: T
     response = client.get("/api/attention/count")
 
     assert response.status_code == 200, response.text
-    assert response.json()["total"] == 7
+    assert response.json()["total"] == 5
 
 
 def test_summary_excluded_transactions_skip_category_noise_but_keep_extraction_alerts(client: TestClient) -> None:
@@ -225,7 +211,7 @@ def test_summary_excluded_transactions_skip_category_noise_but_keep_extraction_a
     attention_types = [item["attention_type"] for item in response.json()["items"]]
     assert attention_types.count("CATEGORY_MISSING") == 1
     assert "TRANSACTION_EXTRACTION_REVIEW" in attention_types
-    assert "TRANSACTION_TYPE_UNKNOWN" in attention_types
+    assert "TRANSACTION_TYPE_UNKNOWN" not in attention_types
 
 
 def test_reviewed_unknown_transaction_type_is_accepted_and_resolved(client: TestClient) -> None:
@@ -245,7 +231,6 @@ def test_reviewed_unknown_transaction_type_is_accepted_and_resolved(client: Test
     assert before.status_code == 200
     assert {item["attention_type"] for item in before.json()["items"]} == {
         "BANK_STATEMENT_REVIEW_REQUIRED",
-        "TRANSACTION_TYPE_UNKNOWN",
     }
     assert reviewed.status_code == 200, reviewed.text
     assert after.json()["total"] == 0
@@ -277,10 +262,9 @@ def test_bulk_review_accepts_unknown_transaction_type_list(client: TestClient) -
     after = client.get("/api/attention")
 
     assert before.status_code == 200
-    assert before.json()["total"] == 3
+    assert before.json()["total"] == 1
     assert {item["attention_type"] for item in before.json()["items"]} == {
         "BANK_STATEMENT_REVIEW_REQUIRED",
-        "TRANSACTION_TYPE_UNKNOWN",
     }
     assert reviewed.status_code == 200, reviewed.text
     assert reviewed.json()["skipped_transaction_ids"] == []

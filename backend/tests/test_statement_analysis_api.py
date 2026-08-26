@@ -49,9 +49,9 @@ def test_unified_analyze_runs_ordered_pipeline_and_refreshes_attention(client: T
     assert chevron["subcategory"] == "AUTO_GAS"
 
     assert attention.status_code == 200, attention.text
-    assert "TRANSACTION_TYPE_UNKNOWN" in {
-        item["attention_type"] for item in attention.json()["items"]
-    }
+    attention_types = {item["attention_type"] for item in attention.json()["items"]}
+    assert "TRANSACTION_TYPE_UNKNOWN" not in attention_types
+    assert "CATEGORY_UNCATEGORIZED" in attention_types
 
 
 def test_unified_reanalysis_preserves_manual_edits_and_selection(client: TestClient) -> None:

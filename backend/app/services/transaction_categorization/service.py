@@ -104,8 +104,6 @@ def update_transaction_category(
         raise HTTPException(status_code=404, detail="Transaction not found.")
     if transaction.excluded:
         raise HTTPException(status_code=400, detail="Excluded transactions cannot be categorized from the active view.")
-    if not is_category_eligible(transaction.transaction_type, transaction.direction):
-        raise HTTPException(status_code=400, detail="Change the transaction type before assigning an expense category.")
 
     _preserve_current_system_category(transaction)
     rule = None
@@ -148,7 +146,6 @@ def bulk_update_transaction_categories(
     for transaction in transactions:
         if (
             transaction.excluded
-            or not is_category_eligible(transaction.transaction_type, transaction.direction)
             or (transaction.user_edited_category and not payload.overwrite_user_edits)
         ):
             skipped_ids.append(transaction.id)

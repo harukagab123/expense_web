@@ -161,33 +161,44 @@ def test_type_changes_update_category_eligibility(client: TestClient) -> None:
     assert chevron_after["category_status"] == "NOT_APPLICABLE"
 
 
-def test_bulk_category_update_skips_protected_and_noneligible_rows(client: TestClient) -> None:
+def test_category_edits_allow_any_active_type_and_bulk_skips_protected_rows(client: TestClient) -> None:
     _statement, transactions = prepare_categorized_statement(client)
     chevron = by_detail(transactions, "CHEVRON 0094821 FREMONT CA")
     amazon = by_detail(transactions, "AMZN MKTPL*AB12C3 AMZN.COM/BILL WA")
     capital_one = by_detail(transactions, "CAPITAL ONE MOBILE PMT")
+    zelle = by_detail(transactions, "ZELLE PAYMENT TO LAWRENCE VIZCONDE")
 
     edit = client.patch(
         f"/api/transactions/{amazon['id']}/category",
         json={"main_category": "PROFIT_LOSS_BUSINESS", "subcategory": "BUSINESS_OFFICE_EXPENSE"},
     )
+    non_expense_edit = client.patch(
+        f"/api/transactions/{capital_one['id']}/category",
+        json={"main_category": "PROFIT_LOSS_BUSINESS", "subcategory": "BUSINESS_BANK_MEMBERSHIP"},
+    )
     bulk = client.patch(
         "/api/transactions/bulk-category",
         json={
-            "transaction_ids": [chevron["id"], amazon["id"], capital_one["id"]],
+            "transaction_ids": [chevron["id"], amazon["id"], capital_one["id"], zelle["id"]],
             "main_category": "PROFIT_LOSS_BUSINESS",
             "subcategory": "BUSINESS_MATERIALS",
         },
     )
 
     assert edit.status_code == 200, edit.text
+    assert non_expense_edit.status_code == 200, non_expense_edit.text
     assert bulk.status_code == 200, bulk.text
     skipped = bulk.json()["skipped_transaction_ids"]
     assert amazon["id"] in skipped
     assert capital_one["id"] in skipped
+    assert zelle["id"] not in skipped
     rows = bulk.json()["transactions"]
     chevron_after = next(transaction for transaction in rows if transaction["id"] == chevron["id"])
     assert chevron_after["subcategory"] == "BUSINESS_MATERIALS"
+    capital_one_after = next(transaction for transaction in rows if transaction["id"] == capital_one["id"])
+    assert capital_one_after["subcategory"] == "BUSINESS_BANK_MEMBERSHIP"
+    zelle_after = next(transaction for transaction in rows if transaction["id"] == zelle["id"])
+    assert zelle_after["subcategory"] == "BUSINESS_MATERIALS"
 
 
 def test_category_validation_excluded_rows_and_manual_rows(client: TestClient) -> None:
