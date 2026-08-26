@@ -55,6 +55,22 @@ def test_category_catalog_endpoint_exposes_requested_hierarchy(client: TestClien
         "Car Payment",
     ]
     assert "Office Expense" in [subcategory["label"] for subcategory in business["subcategories"]]
+    assert [subcategory["label"] for subcategory in business["subcategories"]] == [
+        "Materials",
+        "Advertising",
+        "Interest - Other",
+        "Legal and Professional Services",
+        "Office Expense",
+        "Travel",
+        "Total Meals",
+        "Transportation",
+        "Government",
+        "Donations",
+        "Bank Membership",
+        "Medical",
+        "Education & Learning",
+        "Other Supplies",
+    ]
 
 
 def test_categorize_statement_separates_expenses_from_non_expenses(client: TestClient) -> None:
@@ -75,8 +91,16 @@ def test_categorize_statement_separates_expenses_from_non_expenses(client: TestC
     assert (costco_gas["main_category"], costco_gas["subcategory"]) == ("AUTO_EXPENSE", "AUTO_GAS")
     assert (costco["main_category"], costco["subcategory"]) == ("PROFIT_LOSS_BUSINESS", "BUSINESS_OTHER_SUPPLIES")
     assert costco["category_status"] == "NEEDS_REVIEW"
-    assert (amazon["main_category"], amazon["subcategory"]) == ("PROFIT_LOSS_BUSINESS", "BUSINESS_OFFICE_EXPENSE")
+    assert (amazon["main_category"], amazon["subcategory"]) == ("PROFIT_LOSS_BUSINESS", "BUSINESS_OTHER_SUPPLIES")
     assert amazon["category_status"] == "NEEDS_REVIEW"
+    attention = client.get("/api/attention")
+    assert attention.status_code == 200, attention.text
+    assert any(
+        item["transaction_id"] == amazon["id"]
+        and item["attention_type"] == "CATEGORY_NEEDS_REVIEW"
+        and item["target_field"] == "main_category"
+        for item in attention.json()["items"]
+    )
 
     for transaction in [capital_one, zelle, check]:
         assert transaction["main_category"] is None
@@ -91,26 +115,36 @@ def test_categorize_statement_separates_expenses_from_non_expenses(client: TestC
 
 def test_manual_category_edit_preserves_original_and_survives_recategorization(client: TestClient) -> None:
     statement, transactions = prepare_categorized_statement(client)
-    amazon = by_detail(transactions, "AMZN MKTPL*AB12C3 AMZN.COM/BILL WA")
+    office_depot = add_typed_transaction(client, statement["id"], "OFFICE DEPOT 7721", "EXPENSE")
+    categorized = client.post(f"/api/statements/{statement['id']}/categorize-transactions")
+    assert categorized.status_code == 200, categorized.text
+    office_depot = by_detail(categorized.json()["transactions"], "OFFICE DEPOT 7721")
+    assert office_depot["subcategory"] == "BUSINESS_OFFICE_EXPENSE"
+    selection_edit = client.patch(
+        f"/api/transactions/{office_depot['id']}/inclusion",
+        json={"include_in_expenses": False},
+    )
+    assert selection_edit.status_code == 200, selection_edit.text
 
     edit = client.patch(
-        f"/api/transactions/{amazon['id']}/category",
-        json={"main_category": "PROFIT_LOSS_BUSINESS", "subcategory": "BUSINESS_OFFICE_EXPENSE"},
+        f"/api/transactions/{office_depot['id']}/category",
+        json={"main_category": "PROFIT_LOSS_BUSINESS", "subcategory": "BUSINESS_OTHER_SUPPLIES"},
     )
     recategorized = client.post(f"/api/statements/{statement['id']}/categorize-transactions")
 
     assert edit.status_code == 200, edit.text
     edited = edit.json()
     assert edited["main_category"] == "PROFIT_LOSS_BUSINESS"
-    assert edited["subcategory"] == "BUSINESS_OFFICE_EXPENSE"
+    assert edited["subcategory"] == "BUSINESS_OTHER_SUPPLIES"
     assert edited["category_source"] == "USER_EDITED"
     assert edited["category_status"] == "USER_CONFIRMED"
     assert edited["original_main_category"] == "PROFIT_LOSS_BUSINESS"
     assert edited["original_subcategory"] == "BUSINESS_OFFICE_EXPENSE"
 
-    saved = by_detail(recategorized.json()["transactions"], "AMZN MKTPL*AB12C3 AMZN.COM/BILL WA")
+    saved = by_detail(recategorized.json()["transactions"], "OFFICE DEPOT 7721")
     assert saved["main_category"] == "PROFIT_LOSS_BUSINESS"
-    assert saved["subcategory"] == "BUSINESS_OFFICE_EXPENSE"
+    assert saved["subcategory"] == "BUSINESS_OTHER_SUPPLIES"
+    assert saved["include_in_expenses"] is False
 
 
 def test_saved_category_rule_applies_to_future_similar_transactions(client: TestClient) -> None:

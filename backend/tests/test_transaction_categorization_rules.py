@@ -1,12 +1,20 @@
 from app.services.transaction_categorization.base import (
     AUTO_GAS,
+    AUTO_PARKING,
+    AUTO_TOLLS,
     BUSINESS_INTEREST_OTHER,
     BUSINESS_BANK_MEMBERSHIP,
+    BUSINESS_MATERIALS,
     BUSINESS_MEDICAL,
     BUSINESS_OFFICE_EXPENSE,
+    BUSINESS_OTHER_SUPPLIES,
     BUSINESS_TOTAL_MEALS,
+    BUSINESS_TRANSPORTATION,
     BUSINESS_TRAVEL,
     CATEGORY_CATALOG,
+    CATEGORY_PRIORITY,
+    CATEGORY_PRIORITY_INDEX,
+    HOME_REPAIRS_MAINTENANCE,
     HOME_TELECOM_INTERNET,
     MAIN_AUTO_EXPENSE,
     MAIN_BUSINESS_USE_HOME,
@@ -15,6 +23,9 @@ from app.services.transaction_categorization.base import (
     STATUS_NEEDS_REVIEW,
     STATUS_NOT_APPLICABLE,
     CategoryClassificationInput,
+    UserCategoryRule,
+    MATCH_NORMALIZED_NAME,
+    SOURCE_LEARNED_RULE,
     is_valid_category_pair,
 )
 from app.services.transaction_categorization.engine import categorize_transaction
@@ -57,7 +68,6 @@ def test_exact_category_structure_and_valid_pairs() -> None:
             "Interest - Other",
             "Legal and Professional Services",
             "Office Expense",
-            "Other Supplies",
             "Travel",
             "Total Meals",
             "Transportation",
@@ -66,8 +76,12 @@ def test_exact_category_structure_and_valid_pairs() -> None:
             "Bank Membership",
             "Medical",
             "Education & Learning",
+            "Other Supplies",
         ],
     }
+    assert len(CATEGORY_PRIORITY) == 27
+    assert CATEGORY_PRIORITY_INDEX[(MAIN_AUTO_EXPENSE, AUTO_GAS)] == 1
+    assert CATEGORY_PRIORITY_INDEX[(MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OTHER_SUPPLIES)] == 27
     assert is_valid_category_pair(MAIN_AUTO_EXPENSE, AUTO_GAS)
     assert not is_valid_category_pair(MAIN_AUTO_EXPENSE, BUSINESS_OFFICE_EXPENSE)
 
@@ -89,9 +103,85 @@ def test_gas_and_ambiguous_retail_rules() -> None:
 
     for result in [costco, amazon]:
         assert result.main_category == MAIN_PROFIT_LOSS_BUSINESS
-        assert result.subcategory in {BUSINESS_OFFICE_EXPENSE, "BUSINESS_OTHER_SUPPLIES"}
+        assert result.subcategory == BUSINESS_OTHER_SUPPLIES
         assert result.status == STATUS_NEEDS_REVIEW
         assert result.confidence < 0.7
+
+
+def test_strict_priority_specific_categories_beat_later_generic_categories() -> None:
+    examples = {
+        "CITY PRK GARAGE": (MAIN_AUTO_EXPENSE, AUTO_PARKING),
+        "FASTRAK TOLL": (MAIN_AUTO_EXPENSE, AUTO_TOLLS),
+        "OFFICE DEPOT": (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OFFICE_EXPENSE),
+        "PRINTER INK AND PRINTER PAPER": (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OFFICE_EXPENSE),
+        "JOB MATERIALS LUMBER": (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_MATERIALS),
+        "HOME DEPOT PLUMBING PARTS": (MAIN_BUSINESS_USE_HOME, HOME_REPAIRS_MAINTENANCE),
+        "COMCAST CABLE COMM": (MAIN_BUSINESS_USE_HOME, HOME_TELECOM_INTERNET),
+        "LOCAL RESTAURANT": (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_TOTAL_MEALS),
+        "UBER TRIP": (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_TRANSPORTATION),
+        "LYFT RIDE": (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_TRANSPORTATION),
+        "HOTEL BOOKING": (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_TRAVEL),
+        "UNITED AIRLINES": (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_TRAVEL),
+    }
+
+    for detail, expected_pair in examples.items():
+        result = categorize(detail)
+        assert (result.main_category, result.subcategory) == expected_pair
+
+
+def test_priority_stops_at_first_applicable_category() -> None:
+    parking_and_transportation = categorize("CITY PRK GARAGE UBER")
+    toll_and_transportation = categorize("FASTRAK TOLL LYFT")
+    materials_and_office = categorize("PROJECT MATERIALS OFFICE DEPOT")
+
+    assert parking_and_transportation.subcategory == AUTO_PARKING
+    assert toll_and_transportation.subcategory == AUTO_TOLLS
+    assert materials_and_office.subcategory == BUSINESS_MATERIALS
+
+
+def test_low_confidence_specific_match_still_beats_other_supplies() -> None:
+    result = categorize("UNKNOWN MERCHANT PRK 0029")
+
+    assert result.subcategory == AUTO_PARKING
+    assert result.confidence < 0.7
+    assert result.status == STATUS_NEEDS_REVIEW
+
+
+def test_ambiguous_expense_uses_low_confidence_final_fallback() -> None:
+    result = categorize("QZX MERCHANT 0042")
+
+    assert (result.main_category, result.subcategory) == (
+        MAIN_PROFIT_LOSS_BUSINESS,
+        BUSINESS_OTHER_SUPPLIES,
+    )
+    assert result.confidence < 0.7
+    assert result.status == STATUS_NEEDS_REVIEW
+
+
+def test_explicit_learned_other_supplies_rule_overrides_priority() -> None:
+    result = categorize_transaction(
+        CategoryClassificationInput(
+            transaction_detail="OFFICE DEPOT ORDER 100",
+            normalized_name="Office Depot",
+            transaction_type="EXPENSE",
+            direction="OUTFLOW",
+            statement_institution="CHASE",
+            account_type="CHECKING",
+        ),
+        [
+            UserCategoryRule(
+                id=77,
+                pattern="OFFICE DEPOT",
+                main_category=MAIN_PROFIT_LOSS_BUSINESS,
+                subcategory=BUSINESS_OTHER_SUPPLIES,
+                match_type=MATCH_NORMALIZED_NAME,
+            )
+        ],
+    )
+
+    assert result.subcategory == BUSINESS_OTHER_SUPPLIES
+    assert result.source == SOURCE_LEARNED_RULE
+    assert result.rule_id == 77
 
 
 def test_non_expense_transactions_are_not_applicable() -> None:

@@ -25,6 +25,7 @@ from app.services.transaction_categorization.base import (
     BUSINESS_TOTAL_MEALS,
     BUSINESS_TRANSPORTATION,
     BUSINESS_TRAVEL,
+    CATEGORY_PRIORITY,
     CategoryClassificationInput,
     CategoryClassificationResult,
     HOME_RENT,
@@ -42,33 +43,32 @@ from app.services.transaction_categorization.base import (
 from app.services.transaction_normalization.text import normalized_for_match
 
 
+MINIMUM_APPLICABILITY_CONFIDENCE = 0.50
+
+
 @dataclass(frozen=True)
 class DeterministicCategoryRule:
     main_category: str
     subcategory: str
     confidence: float
     patterns: tuple[re.Pattern[str], ...]
+    weak_patterns: tuple[re.Pattern[str], ...] = ()
+    weak_confidence: float = 0.55
     status: str | None = None
 
 
 EXPENSE_RULES: tuple[DeterministicCategoryRule, ...] = (
     DeterministicCategoryRule(
         MAIN_AUTO_EXPENSE,
-        AUTO_PARKING,
-        0.93,
-        (re.compile(r"\bPARKING\b"), re.compile(r"\bPARKMOBILE\b"), re.compile(r"\bPARK\s+METER\b")),
-    ),
-    DeterministicCategoryRule(
-        MAIN_AUTO_EXPENSE,
-        AUTO_TOLLS,
-        0.94,
-        (re.compile(r"\bFASTRAK\b"), re.compile(r"\bTOLL\s+ROAD\b"), re.compile(r"\bBRIDGE\s+TOLL\b")),
-    ),
-    DeterministicCategoryRule(
-        MAIN_AUTO_EXPENSE,
-        AUTO_TIRES,
-        0.95,
-        (re.compile(r"\bAMERICA'?S\s+TIRE\b"), re.compile(r"\bDISCOUNT\s+TIRE\b"), re.compile(r"\bTIRE(S)?\b")),
+        AUTO_GAS,
+        0.98,
+        (
+            re.compile(r"\bCHEVRON\b"),
+            re.compile(r"\bSHELL\b"),
+            re.compile(r"\bARCO\b"),
+            re.compile(r"(?:^|\b)76(?:\b|$)"),
+            re.compile(r"\bCOSTCO\b.*\bGAS\b"),
+        ),
     ),
     DeterministicCategoryRule(
         MAIN_AUTO_EXPENSE,
@@ -84,19 +84,6 @@ EXPENSE_RULES: tuple[DeterministicCategoryRule, ...] = (
     ),
     DeterministicCategoryRule(
         MAIN_AUTO_EXPENSE,
-        AUTO_CAR_PAYMENT,
-        0.84,
-        (
-            re.compile(r"\bAUTO\s+LOAN\b"),
-            re.compile(r"\bVEHICLE\s+LOAN\b"),
-            re.compile(r"\bCAR\s+LOAN\b"),
-            re.compile(r"\bHONDA\s+FINANCIAL\b"),
-            re.compile(r"\bTOYOTA\s+FINANCIAL\b"),
-            re.compile(r"\bLEASE\s+PAYMENT\b"),
-        ),
-    ),
-    DeterministicCategoryRule(
-        MAIN_AUTO_EXPENSE,
         AUTO_INSURANCE,
         0.78,
         (
@@ -108,14 +95,43 @@ EXPENSE_RULES: tuple[DeterministicCategoryRule, ...] = (
     ),
     DeterministicCategoryRule(
         MAIN_AUTO_EXPENSE,
-        AUTO_GAS,
-        0.98,
+        AUTO_PARKING,
+        0.93,
         (
-            re.compile(r"\bCHEVRON\b"),
-            re.compile(r"\bSHELL\b"),
-            re.compile(r"\bARCO\b"),
-            re.compile(r"(?:^|\b)76(?:\b|$)"),
-            re.compile(r"\bCOSTCO\b.*\bGAS\b"),
+            re.compile(r"\bPARKING\b"),
+            re.compile(r"\bPARKMOBILE\b"),
+            re.compile(r"\bPARK\s+METER\b"),
+            re.compile(r"\bPARKING\s+GARAGE\b"),
+        ),
+        weak_patterns=(re.compile(r"\bPRK\b"),),
+    ),
+    DeterministicCategoryRule(
+        MAIN_AUTO_EXPENSE,
+        AUTO_TIRES,
+        0.95,
+        (re.compile(r"\bAMERICA'?S\s+TIRE\b"), re.compile(r"\bDISCOUNT\s+TIRE\b"), re.compile(r"\bTIRE(S)?\b")),
+    ),
+    DeterministicCategoryRule(
+        MAIN_AUTO_EXPENSE,
+        AUTO_TOLLS,
+        0.94,
+        (
+            re.compile(r"\bFASTRAK\b"),
+            re.compile(r"\bTOLL(?:S|\s+ROAD)?\b"),
+            re.compile(r"\bBRIDGE\s+TOLL\b"),
+        ),
+    ),
+    DeterministicCategoryRule(
+        MAIN_AUTO_EXPENSE,
+        AUTO_CAR_PAYMENT,
+        0.84,
+        (
+            re.compile(r"\bAUTO\s+LOAN\b"),
+            re.compile(r"\bVEHICLE\s+LOAN\b"),
+            re.compile(r"\bCAR\s+LOAN\b"),
+            re.compile(r"\bHONDA\s+FINANCIAL\b"),
+            re.compile(r"\bTOYOTA\s+FINANCIAL\b"),
+            re.compile(r"\bLEASE\s+PAYMENT\b"),
         ),
     ),
     DeterministicCategoryRule(
@@ -154,6 +170,7 @@ EXPENSE_RULES: tuple[DeterministicCategoryRule, ...] = (
         0.74,
         (
             re.compile(r"\bPLUMBER\b"),
+            re.compile(r"\bHOME\s+DEPOT\b.*\bPLUMBING\s+PARTS?\b"),
             re.compile(r"\bHANDYMAN\b"),
             re.compile(r"\bREPAIR\s+SERVICE\b"),
             re.compile(r"\bHARDWARE\s+REPAIR\b"),
@@ -166,6 +183,7 @@ EXPENSE_RULES: tuple[DeterministicCategoryRule, ...] = (
         (
             re.compile(r"\bOFFICE\s+DEPOT\b"),
             re.compile(r"\bSTAPLES\b"),
+            re.compile(r"\bPRINTER\s+(?:INK|PAPER)\b"),
             re.compile(r"\bADOBE\b.*\b(?:ACROBAT|CREATIVE|SUBSCRIPTION)\b"),
             re.compile(r"\bMICROSOFT\s+365\b"),
         ),
@@ -201,8 +219,8 @@ EXPENSE_RULES: tuple[DeterministicCategoryRule, ...] = (
         0.82,
         (
             re.compile(r"\bLUMBER\b"),
-            re.compile(r"\bBUILDING\s+MATERIAL"),
-            re.compile(r"\bCONSTRUCTION\s+SUPPLY\b"),
+            re.compile(r"\b(?:BUILDING|PROJECT|JOB)\s+MATERIALS?\b"),
+            re.compile(r"\bCONSTRUCTION\s+SUPPL(?:Y|IES)\b"),
         ),
     ),
     DeterministicCategoryRule(
@@ -287,6 +305,13 @@ EXPENSE_RULES: tuple[DeterministicCategoryRule, ...] = (
     ),
 )
 
+EXPENSE_RULES_BY_CATEGORY = {
+    (rule.main_category, rule.subcategory): rule
+    for rule in EXPENSE_RULES
+}
+if len(EXPENSE_RULES_BY_CATEGORY) != len(EXPENSE_RULES):
+    raise RuntimeError("Deterministic expense categories must have at most one rule definition.")
+
 def match_known_category_rule(
     classification_input: CategoryClassificationInput,
 ) -> CategoryClassificationResult:
@@ -309,36 +334,26 @@ def match_known_category_rule(
             0.82,
         )
 
-    for rule in EXPENSE_RULES:
-        if _matches_any(text, rule.patterns):
+    for category_pair in CATEGORY_PRIORITY:
+        rule = EXPENSE_RULES_BY_CATEGORY.get(category_pair)
+        evidence = _matching_evidence(rule, text) if rule is not None else None
+        if evidence is not None and evidence[0] >= MINIMUM_APPLICABILITY_CONFIDENCE:
+            confidence, status = evidence
             return categorized_result(
                 rule.main_category,
                 rule.subcategory,
-                rule.confidence,
-                status=rule.status,
+                confidence,
+                status=status,
             )
 
-    return _best_supported_fallback(text)
+    return _other_supplies_fallback()
 
 
-def _best_supported_fallback(text: str) -> CategoryClassificationResult:
-    candidates = {
-        (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OTHER_SUPPLIES): 0.30,
-        (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OFFICE_EXPENSE): 0.24,
-    }
-    if re.search(r"\b(?:AMAZON|AMZN)\b", text):
-        candidates[(MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OFFICE_EXPENSE)] += 0.19
-        candidates[(MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OTHER_SUPPLIES)] += 0.11
-    if re.search(r"\bCOSTCO\b.*\b(?:WAREHOUSE|WHSE)\b|\bCOSTCO\b", text):
-        candidates[(MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OTHER_SUPPLIES)] += 0.14
-    (main_category, subcategory), confidence = max(
-        candidates.items(),
-        key=lambda candidate: (candidate[1], candidate[0][0], candidate[0][1]),
-    )
+def _other_supplies_fallback() -> CategoryClassificationResult:
     return categorized_result(
-        main_category,
-        subcategory,
-        confidence,
+        MAIN_PROFIT_LOSS_BUSINESS,
+        BUSINESS_OTHER_SUPPLIES,
+        0.30,
         status=STATUS_NEEDS_REVIEW,
     )
 
@@ -354,3 +369,14 @@ def _combined_text(classification_input: CategoryClassificationInput) -> str:
 
 def _matches_any(value: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
     return any(pattern.search(value) is not None for pattern in patterns)
+
+
+def _matching_evidence(
+    rule: DeterministicCategoryRule,
+    text: str,
+) -> tuple[float, str | None] | None:
+    if _matches_any(text, rule.patterns):
+        return rule.confidence, rule.status
+    if _matches_any(text, rule.weak_patterns):
+        return rule.weak_confidence, STATUS_NEEDS_REVIEW
+    return None

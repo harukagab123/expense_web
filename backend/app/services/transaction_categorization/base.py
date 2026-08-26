@@ -106,7 +106,6 @@ CATEGORY_CATALOG: tuple[MainCategoryDefinition, ...] = (
             SubcategoryDefinition(BUSINESS_INTEREST_OTHER, "Interest - Other"),
             SubcategoryDefinition(BUSINESS_LEGAL_PROFESSIONAL, "Legal and Professional Services"),
             SubcategoryDefinition(BUSINESS_OFFICE_EXPENSE, "Office Expense"),
-            SubcategoryDefinition(BUSINESS_OTHER_SUPPLIES, "Other Supplies"),
             SubcategoryDefinition(BUSINESS_TRAVEL, "Travel"),
             SubcategoryDefinition(BUSINESS_TOTAL_MEALS, "Total Meals"),
             SubcategoryDefinition(BUSINESS_TRANSPORTATION, "Transportation"),
@@ -115,9 +114,23 @@ CATEGORY_CATALOG: tuple[MainCategoryDefinition, ...] = (
             SubcategoryDefinition(BUSINESS_BANK_MEMBERSHIP, "Bank Membership"),
             SubcategoryDefinition(BUSINESS_MEDICAL, "Medical"),
             SubcategoryDefinition(BUSINESS_EDUCATION_LEARNING, "Education & Learning"),
+            SubcategoryDefinition(BUSINESS_OTHER_SUPPLIES, "Other Supplies"),
         ),
     ),
 )
+
+# This flattened sequence is the machine-classification priority as well as the
+# display/report order. Consumers must derive ordering from this catalog rather
+# than maintaining their own category lists.
+CATEGORY_PRIORITY: tuple[tuple[str, str], ...] = tuple(
+    (category.id, subcategory.id)
+    for category in CATEGORY_CATALOG
+    for subcategory in category.subcategories
+)
+CATEGORY_PRIORITY_INDEX = {
+    category_pair: priority
+    for priority, category_pair in enumerate(CATEGORY_PRIORITY, start=1)
+}
 
 CATEGORY_IDS = {category.id for category in CATEGORY_CATALOG}
 SUBCATEGORY_TO_MAIN = {

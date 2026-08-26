@@ -18,6 +18,7 @@ import {
   filePreviewUrl,
   getAttention,
   getAttentionCount,
+  getCategoryCatalog,
   getCategoryRules,
   getFileManagerTree,
   getStatementForFile,
@@ -50,6 +51,7 @@ import type {
   StatementTerm,
   StoredFile,
   CategoryMainValue,
+  CategoryCatalogResponse,
   CategoryRule,
   CategorySubcategoryValue,
   TransactionDirection,
@@ -124,6 +126,12 @@ type InlineTransactionEditValues = TransactionFormValues & {
   main_category: CategoryMainValue;
   subcategory: CategorySubcategoryValue;
   use_for_future: boolean;
+};
+
+type CategoryOption = {
+  value: CategoryMainValue;
+  label: string;
+  subcategories: Array<{ value: CategorySubcategoryValue; label: string }>;
 };
 
 type TransactionDialogState = { mode: "add" } | null;
@@ -286,7 +294,6 @@ const subcategoryLabels: Record<string, string> = {
   BUSINESS_INTEREST_OTHER: "Interest - Other",
   BUSINESS_LEGAL_PROFESSIONAL: "Legal and Professional Services",
   BUSINESS_OFFICE_EXPENSE: "Office Expense",
-  BUSINESS_OTHER_SUPPLIES: "Other Supplies",
   BUSINESS_TRAVEL: "Travel",
   BUSINESS_TOTAL_MEALS: "Total Meals",
   BUSINESS_TRANSPORTATION: "Transportation",
@@ -295,6 +302,7 @@ const subcategoryLabels: Record<string, string> = {
   BUSINESS_BANK_MEMBERSHIP: "Bank Membership",
   BUSINESS_MEDICAL: "Medical",
   BUSINESS_EDUCATION_LEARNING: "Education & Learning",
+  BUSINESS_OTHER_SUPPLIES: "Other Supplies",
 };
 
 const categoryStatusLabels: Record<string, string> = {
@@ -337,54 +345,6 @@ const transactionTypeValues: TransactionTypeValue[] = [
   "INTEREST",
   "OTHER",
   "UNKNOWN",
-];
-
-const categoryOptions: Array<{ value: CategoryMainValue; label: string; subcategories: Array<{ value: CategorySubcategoryValue; label: string }> }> = [
-  {
-    value: "AUTO_EXPENSE",
-    label: "AUTO EXPENSE",
-    subcategories: [
-      { value: "AUTO_GAS", label: "Gas" },
-      { value: "AUTO_INSURANCE", label: "Insurance" },
-      { value: "AUTO_MAINTENANCE", label: "Car Maintenance" },
-      { value: "AUTO_PARKING", label: "Parking Fee" },
-      { value: "AUTO_TIRES", label: "Tires" },
-      { value: "AUTO_TOLLS", label: "Tolls" },
-      { value: "AUTO_CAR_PAYMENT", label: "Car Payment" },
-    ],
-  },
-  {
-    value: "BUSINESS_USE_OF_HOME",
-    label: "BUSINESS USE OF HOME",
-    subcategories: [
-      { value: "HOME_INSURANCE", label: "Insurance" },
-      { value: "HOME_RENT", label: "Rent" },
-      { value: "HOME_REPAIRS_MAINTENANCE", label: "Repairs and Maintenance" },
-      { value: "HOME_UTILITIES", label: "Utilities" },
-      { value: "HOME_TELECOM_INTERNET", label: "Telecom/Internet" },
-      { value: "HOME_OTHER_EXPENSE", label: "Other Expense" },
-    ],
-  },
-  {
-    value: "PROFIT_LOSS_BUSINESS",
-    label: "PROFIT OR LOSS FROM BUSINESS",
-    subcategories: [
-      { value: "BUSINESS_MATERIALS", label: "Materials" },
-      { value: "BUSINESS_ADVERTISING", label: "Advertising" },
-      { value: "BUSINESS_INTEREST_OTHER", label: "Interest - Other" },
-      { value: "BUSINESS_LEGAL_PROFESSIONAL", label: "Legal and Professional Services" },
-      { value: "BUSINESS_OFFICE_EXPENSE", label: "Office Expense" },
-      { value: "BUSINESS_OTHER_SUPPLIES", label: "Other Supplies" },
-      { value: "BUSINESS_TRAVEL", label: "Travel" },
-      { value: "BUSINESS_TOTAL_MEALS", label: "Total Meals" },
-      { value: "BUSINESS_TRANSPORTATION", label: "Transportation" },
-      { value: "BUSINESS_GOVERNMENT", label: "Government" },
-      { value: "BUSINESS_DONATIONS", label: "Donations" },
-      { value: "BUSINESS_BANK_MEMBERSHIP", label: "Bank Membership" },
-      { value: "BUSINESS_MEDICAL", label: "Medical" },
-      { value: "BUSINESS_EDUCATION_LEARNING", label: "Education & Learning" },
-    ],
-  },
 ];
 
 const categoryFilterOptions: Array<{ value: CategoryFilter; label: string }> = [
@@ -484,19 +444,42 @@ function transactionSuggestedInclude(transaction: StatementTransaction): string 
 }
 
 function isCategoryMainValue(value: string | null | undefined): value is CategoryMainValue {
-  return categoryOptions.some((option) => option.value === value);
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(categoryLabels, value);
 }
 
 function isCategorySubcategoryValue(value: string | null | undefined): value is CategorySubcategoryValue {
-  return categoryOptions.some((option) => option.subcategories.some((subcategory) => subcategory.value === value));
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(subcategoryLabels, value);
 }
 
-function subcategoryOptionsFor(mainCategory: CategoryMainValue): Array<{ value: CategorySubcategoryValue; label: string }> {
+function categoryOptionsFromCatalog(catalog: CategoryCatalogResponse): CategoryOption[] {
+  return catalog.categories.flatMap((category) => {
+    if (!isCategoryMainValue(category.id)) {
+      return [];
+    }
+    return [{
+      value: category.id,
+      label: category.label,
+      subcategories: category.subcategories.flatMap((subcategory) =>
+        isCategorySubcategoryValue(subcategory.id)
+          ? [{ value: subcategory.id, label: subcategory.label }]
+          : [],
+      ),
+    }];
+  });
+}
+
+function subcategoryOptionsFor(
+  categoryOptions: CategoryOption[],
+  mainCategory: CategoryMainValue,
+): Array<{ value: CategorySubcategoryValue; label: string }> {
   return categoryOptions.find((option) => option.value === mainCategory)?.subcategories ?? [];
 }
 
-function defaultSubcategoryFor(mainCategory: CategoryMainValue): CategorySubcategoryValue {
-  return subcategoryOptionsFor(mainCategory)[0]?.value ?? "BUSINESS_OTHER_SUPPLIES";
+function defaultSubcategoryFor(
+  categoryOptions: CategoryOption[],
+  mainCategory: CategoryMainValue,
+): CategorySubcategoryValue {
+  return subcategoryOptionsFor(categoryOptions, mainCategory)[0]?.value ?? "BUSINESS_OTHER_SUPPLIES";
 }
 
 function categoryStatus(transaction: StatementTransaction): string {
@@ -558,11 +541,11 @@ function transactionMatchesCategoryFilter(transaction: StatementTransaction, fil
   return status === "NOT_APPLICABLE";
 }
 
-function validateCategoryForm(values: CategoryFormValues): string {
+function validateCategoryForm(values: CategoryFormValues, categoryOptions: CategoryOption[]): string {
   if (!isCategoryMainValue(values.main_category)) {
     return "Main category is required.";
   }
-  if (!subcategoryOptionsFor(values.main_category).some((option) => option.value === values.subcategory)) {
+  if (!subcategoryOptionsFor(categoryOptions, values.main_category).some((option) => option.value === values.subcategory)) {
     return "Subcategory is not valid for the selected main category.";
   }
   return "";
@@ -743,17 +726,20 @@ function transactionPayloadFromValues(values: TransactionFormValues): Required<T
   };
 }
 
-function inlineEditValuesFromTransaction(transaction: StatementTransaction): InlineTransactionEditValues {
+function inlineEditValuesFromTransaction(
+  transaction: StatementTransaction,
+  categoryOptions: CategoryOption[],
+): InlineTransactionEditValues {
   const mainCategory = categoryMainValue(transaction) ?? "PROFIT_LOSS_BUSINESS";
   const subcategory = categorySubcategoryValue(transaction);
-  const validSubcategories = subcategoryOptionsFor(mainCategory);
+  const validSubcategories = subcategoryOptionsFor(categoryOptions, mainCategory);
   return {
     ...transactionToFormValues(transaction),
     normalized_name: transaction.normalized_name ?? "",
     main_category: mainCategory,
     subcategory: subcategory && validSubcategories.some((option) => option.value === subcategory)
       ? subcategory
-      : defaultSubcategoryFor(mainCategory),
+      : defaultSubcategoryFor(categoryOptions, mainCategory),
     use_for_future: false,
   };
 }
@@ -761,23 +747,25 @@ function inlineEditValuesFromTransaction(transaction: StatementTransaction): Inl
 function validateInlineTransactionEdit(
   values: InlineTransactionEditValues,
   transaction: StatementTransaction,
+  categoryOptions: CategoryOption[],
 ): string {
   const transactionValidation = validateTransactionForm(values);
   if (transactionValidation) {
     return transactionValidation;
   }
-  const initialValues = inlineEditValuesFromTransaction(transaction);
+  const initialValues = inlineEditValuesFromTransaction(transaction, categoryOptions);
   if (values.normalized_name !== initialValues.normalized_name && !values.normalized_name.trim()) {
     return "Name is required.";
   }
-  return validateCategoryForm({ ...values, use_for_future: false });
+  return validateCategoryForm({ ...values, use_for_future: false }, categoryOptions);
 }
 
 function inlineTransactionEditIsDirty(
   transaction: StatementTransaction,
   values: InlineTransactionEditValues,
+  categoryOptions: CategoryOption[],
 ): boolean {
-  const initialValues = inlineEditValuesFromTransaction(transaction);
+  const initialValues = inlineEditValuesFromTransaction(transaction, categoryOptions);
   return (
     values.transaction_date !== initialValues.transaction_date ||
     values.transaction_detail !== initialValues.transaction_detail ||
@@ -1028,6 +1016,7 @@ function scrollTreeKeyIntoView(key: string) {
 
 export default function App() {
   const [tree, setTree] = useState<FileManagerTree>(emptyTree);
+  const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([]);
   const [selected, setSelected] = useState<SelectedItem>({ type: "root" });
   const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState("");
@@ -1130,6 +1119,24 @@ export default function App() {
   useEffect(() => {
     void loadTree();
   }, [loadTree]);
+
+  useEffect(() => {
+    let isActive = true;
+    void getCategoryCatalog()
+      .then((catalog) => {
+        if (isActive) {
+          setCategoryOptions(categoryOptionsFromCatalog(catalog));
+        }
+      })
+      .catch((caught) => {
+        if (isActive) {
+          setError(caught instanceof Error ? caught.message : "Category options could not be loaded.");
+        }
+      });
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   useEffect(() => {
     void refreshAttention();
@@ -1531,7 +1538,11 @@ export default function App() {
                 onToggle={() => setIsAttentionOpen((current) => !current)}
               />
             </div>
-            <button onClick={() => setIsRulesOpen(true)} type="button">
+            <button
+              disabled={categoryOptions.length === 0}
+              onClick={() => setIsRulesOpen(true)}
+              type="button"
+            >
               Learned Rules
             </button>
             <button onClick={handleCreateFolder} type="button">
@@ -1756,6 +1767,7 @@ export default function App() {
           {selectedFile ? (
             <FileDetails
               attentionTarget={attentionFocusTarget?.fileId === selectedFile.id ? attentionFocusTarget : null}
+              categoryOptions={categoryOptions}
               file={selectedFile}
               locationPath={selectedLocationPath}
               onAttentionRefresh={refreshAttention}
@@ -1774,7 +1786,9 @@ export default function App() {
         </section>
       </section>
 
-      {isRulesOpen ? <LearnedRulesDialog onClose={() => setIsRulesOpen(false)} /> : null}
+      {isRulesOpen ? (
+        <LearnedRulesDialog categoryOptions={categoryOptions} onClose={() => setIsRulesOpen(false)} />
+      ) : null}
 
       {nameDialog ? (
         <div className="modal-backdrop" role="presentation">
@@ -2017,6 +2031,7 @@ type PreviewState =
 
 function FileDetails({
   attentionTarget,
+  categoryOptions,
   file,
   locationPath,
   onAttentionRefresh,
@@ -2024,6 +2039,7 @@ function FileDetails({
   onTreeRefresh,
 }: {
   attentionTarget: AttentionFocusTarget | null;
+  categoryOptions: CategoryOption[];
   file: StoredFile;
   locationPath: string;
   onAttentionRefresh: () => Promise<void>;
@@ -2300,6 +2316,7 @@ function FileDetails({
       )}
       {isStatementWorkspace && statement ? (
         <TransactionPanel
+          categoryOptions={categoryOptions}
           error={transactionError}
           isAnalyzing={isAnalyzing}
           isLoading={isTransactionsLoading}
@@ -2739,6 +2756,7 @@ function StatementPanel({
 
 function TransactionPanel({
   attentionTarget,
+  categoryOptions,
   error,
   isAnalyzing,
   isLoading,
@@ -2758,6 +2776,7 @@ function TransactionPanel({
   transactions,
 }: {
   attentionTarget: AttentionFocusTarget | null;
+  categoryOptions: CategoryOption[];
   error: string;
   isAnalyzing: boolean;
   isLoading: boolean;
@@ -2788,7 +2807,7 @@ function TransactionPanel({
   const [selectedTransactionIds, setSelectedTransactionIds] = useState<Set<number>>(new Set());
   const [bulkCategoryFormValues, setBulkCategoryFormValues] = useState<BulkCategoryFormValues>({
     main_category: "PROFIT_LOSS_BUSINESS",
-    subcategory: "BUSINESS_OTHER_SUPPLIES",
+    subcategory: defaultSubcategoryFor(categoryOptions, "PROFIT_LOSS_BUSINESS"),
     overwrite_user_edits: false,
   });
   const [bulkCategoryError, setBulkCategoryError] = useState("");
@@ -2880,8 +2899,8 @@ function TransactionPanel({
     if (!editingTransaction || !inlineEditValues) {
       return false;
     }
-    return inlineTransactionEditIsDirty(editingTransaction, inlineEditValues);
-  }, [editingTransaction, inlineEditValues]);
+    return inlineTransactionEditIsDirty(editingTransaction, inlineEditValues, categoryOptions);
+  }, [categoryOptions, editingTransaction, inlineEditValues]);
   const startInlineEdit = useCallback(
     (transaction: StatementTransaction, targetField: string | null = null, preserveAttention = false) => {
       if (
@@ -2896,7 +2915,7 @@ function TransactionPanel({
         setActiveAttentionFocus(null);
       }
       setEditingTransactionId(transaction.id);
-      setInlineEditValues(inlineEditValuesFromTransaction(transaction));
+      setInlineEditValues(inlineEditValuesFromTransaction(transaction, categoryOptions));
       setInlineEditError("");
       if (targetField) {
         window.requestAnimationFrame(() => {
@@ -2910,7 +2929,7 @@ function TransactionPanel({
         });
       }
     },
-    [editingTransactionId, hasUnsavedInlineEdit],
+    [categoryOptions, editingTransactionId, hasUnsavedInlineEdit],
   );
 
   useEffect(() => {
@@ -3077,7 +3096,7 @@ function TransactionPanel({
         return {
           ...current,
           main_category: value,
-          subcategory: defaultSubcategoryFor(value),
+          subcategory: defaultSubcategoryFor(categoryOptions, value),
         };
       }
       return { ...current, [field]: value };
@@ -3090,13 +3109,13 @@ function TransactionPanel({
       return;
     }
 
-    const validationMessage = validateInlineTransactionEdit(inlineEditValues, transaction);
+    const validationMessage = validateInlineTransactionEdit(inlineEditValues, transaction, categoryOptions);
     if (validationMessage) {
       setInlineEditError(validationMessage);
       return;
     }
 
-    const initialValues = inlineEditValuesFromTransaction(transaction);
+    const initialValues = inlineEditValuesFromTransaction(transaction, categoryOptions);
     const corePayload = transactionPayloadChanges(transaction, inlineEditValues);
     const normalizedNameChanged = inlineEditValues.normalized_name !== initialValues.normalized_name;
     const categoryChanged =
@@ -3170,7 +3189,7 @@ function TransactionPanel({
       setBulkCategoryFormValues((current) => ({
         ...current,
         main_category: value,
-        subcategory: defaultSubcategoryFor(value),
+        subcategory: defaultSubcategoryFor(categoryOptions, value),
       }));
     }
     if (field === "subcategory" && typeof value === "string" && isCategorySubcategoryValue(value)) {
@@ -3384,7 +3403,10 @@ function TransactionPanel({
       return;
     }
 
-    const formErrorMessage = validateCategoryForm({ ...bulkCategoryFormValues, use_for_future: false });
+    const formErrorMessage = validateCategoryForm(
+      { ...bulkCategoryFormValues, use_for_future: false },
+      categoryOptions,
+    );
     if (formErrorMessage) {
       setBulkCategoryError(formErrorMessage);
       setBulkCategoryNotice("");
@@ -3629,7 +3651,7 @@ function TransactionPanel({
                   updateBulkCategoryFormValue("subcategory", event.target.value as CategorySubcategoryValue)
                 }
               >
-                {subcategoryOptionsFor(bulkCategoryFormValues.main_category).map((option) => (
+                {subcategoryOptionsFor(categoryOptions, bulkCategoryFormValues.main_category).map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
@@ -3866,7 +3888,7 @@ function TransactionPanel({
                             updateInlineEditValue("subcategory", event.target.value as CategorySubcategoryValue)
                           }
                         >
-                          {subcategoryOptionsFor(editValues.main_category).map((option) => (
+                          {subcategoryOptionsFor(categoryOptions, editValues.main_category).map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
@@ -4039,7 +4061,13 @@ function TransactionPanel({
   );
 }
 
-function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
+function LearnedRulesDialog({
+  categoryOptions,
+  onClose,
+}: {
+  categoryOptions: CategoryOption[];
+  onClose: () => void;
+}) {
   const [rules, setRules] = useState<CategoryRule[]>([]);
   const [terms, setTerms] = useState<StatementTerm[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -4047,7 +4075,7 @@ function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const [editValues, setEditValues] = useState<CategoryFormValues>({
     main_category: "PROFIT_LOSS_BUSINESS",
-    subcategory: "BUSINESS_OTHER_SUPPLIES",
+    subcategory: defaultSubcategoryFor(categoryOptions, "PROFIT_LOSS_BUSINESS"),
     use_for_future: false,
   });
 
@@ -4073,7 +4101,7 @@ function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
     const mainCategory = isCategoryMainValue(rule.main_category) ? rule.main_category : "PROFIT_LOSS_BUSINESS";
     const subcategory = isCategorySubcategoryValue(rule.subcategory)
       ? rule.subcategory
-      : defaultSubcategoryFor(mainCategory);
+      : defaultSubcategoryFor(categoryOptions, mainCategory);
     setEditingRuleId(rule.id);
     setEditValues({ main_category: mainCategory, subcategory, use_for_future: false });
     setError("");
@@ -4084,7 +4112,7 @@ function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
     if (editingRuleId === null) {
       return;
     }
-    const validationMessage = validateCategoryForm(editValues);
+    const validationMessage = validateCategoryForm(editValues, categoryOptions);
     if (validationMessage) {
       setError(validationMessage);
       return;
@@ -4203,7 +4231,7 @@ function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
                   const mainCategory = event.target.value as CategoryMainValue;
                   setEditValues({
                     main_category: mainCategory,
-                    subcategory: defaultSubcategoryFor(mainCategory),
+                    subcategory: defaultSubcategoryFor(categoryOptions, mainCategory),
                     use_for_future: false,
                   });
                 }}
@@ -4220,7 +4248,7 @@ function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
                   subcategory: event.target.value as CategorySubcategoryValue,
                 }))}
               >
-                {subcategoryOptionsFor(editValues.main_category).map((option) => (
+                {subcategoryOptionsFor(categoryOptions, editValues.main_category).map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
