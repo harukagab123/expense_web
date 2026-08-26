@@ -70,6 +70,7 @@ def categorize_transactions_for_statement(session: Session, statement_id: int) -
                 direction=transaction.direction,
                 statement_institution=statement.institution,
                 account_type=statement.account_type,
+                interpreted_detail=transaction.interpreted_detail,
             ),
             rules,
         )
@@ -125,6 +126,9 @@ def update_transaction_category(
     transaction.category_updated_at = datetime.now(UTC)
     transaction.user_edited_category = True
     transaction.category_rule_id = rule.id if rule is not None else None
+    from app.services.statement_terminology.service import confirm_terms_from_category
+
+    confirm_terms_from_category(session, transaction, payload.main_category, payload.subcategory)
     from app.services.transaction_review.service import mark_review_needed_after_user_change
 
     mark_review_needed_after_user_change(transaction)
@@ -209,7 +213,7 @@ def _apply_category_result(
 
 def _load_user_rules(session: Session) -> list[UserCategoryRule]:
     rules = session.execute(
-        select(CategoryRule).order_by(
+        select(CategoryRule).where(CategoryRule.active.is_(True)).order_by(
             CategoryRule.match_type.asc(),
             CategoryRule.pattern.desc(),
         )
@@ -229,7 +233,7 @@ def _load_user_rules(session: Session) -> list[UserCategoryRule]:
 def list_category_rules(session: Session) -> list[CategoryRule]:
     return list(
         session.execute(
-            select(CategoryRule).order_by(
+            select(CategoryRule).where(CategoryRule.active.is_(True)).order_by(
                 CategoryRule.pattern.asc(),
                 CategoryRule.match_type.asc(),
                 CategoryRule.id.asc(),
@@ -321,6 +325,7 @@ def _create_or_update_rule(
             subcategory=subcategory,
             match_type=selected_match_type,
             times_confirmed=1,
+            active=True,
         )
         session.add(rule)
         session.flush()

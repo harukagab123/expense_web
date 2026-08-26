@@ -23,7 +23,7 @@ from app.services.statement_detection.base import (
     STATUS_FAILED,
     STATUS_NEEDS_REVIEW,
 )
-from app.services.transaction_categorization.base import STATUS_NOT_APPLICABLE, UNCATEGORIZED
+from app.services.transaction_categorization.base import STATUS_NOT_APPLICABLE
 from app.services.transaction_review.service import REVIEW_REVIEWED
 
 
@@ -284,19 +284,6 @@ def transaction_attention_items(transaction: Transaction) -> list[AttentionItem]
                     _transaction_description(transaction),
                     "subcategory",
                     "subcategory=BLANK",
-                    blocking=True,
-                )
-            )
-        elif transaction.subcategory == UNCATEGORIZED:
-            items.append(
-                _transaction_item(
-                    transaction,
-                    "CATEGORY_UNCATEGORIZED",
-                    SEVERITY_REVIEW,
-                    "Uncategorized Expense",
-                    _transaction_description(transaction),
-                    "subcategory",
-                    "subcategory=UNCATEGORIZED",
                     blocking=True,
                 )
             )

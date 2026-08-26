@@ -37,7 +37,6 @@ CategoryMainValue = Literal[
     "AUTO_EXPENSE",
     "BUSINESS_USE_OF_HOME",
     "PROFIT_LOSS_BUSINESS",
-    "PERSONAL_INTERNAL",
 ]
 CategorySubcategoryValue = Literal[
     "AUTO_GAS",
@@ -67,9 +66,6 @@ CategorySubcategoryValue = Literal[
     "BUSINESS_BANK_MEMBERSHIP",
     "BUSINESS_MEDICAL",
     "BUSINESS_EDUCATION_LEARNING",
-    "PERSONAL_OTHER_ITEMS",
-    "PERSONAL",
-    "UNCATEGORIZED",
 ]
 
 
@@ -144,6 +140,10 @@ class TransactionResponse(BaseModel):
     original_direction: str | None
     original_source_page: int | None
     original_source_order: int | None
+    interpreted_detail: str | None
+    terminology_confidence: float = Field(ge=0.0, le=1.0)
+    terminology_matches: str | None
+    terminology_updated_at: datetime | None
     normalized_name: str | None
     normalization_confidence: float = Field(ge=0.0, le=1.0)
     normalization_source: str
@@ -271,6 +271,23 @@ class CategoryRuleResponse(BaseModel):
     subcategory: str
     match_type: str
     times_confirmed: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class StatementTermResponse(BaseModel):
+    id: int
+    term: str
+    normalized_meaning: str
+    institution: str
+    context: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    times_seen: int
+    times_confirmed: int
+    source: str
     created_at: datetime
     updated_at: datetime
 

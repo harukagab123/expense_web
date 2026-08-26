@@ -14,6 +14,7 @@ import type {
   StatementLookupResponse,
   StatementUpdate,
   StatementTransaction,
+  StatementTerm,
   TransactionTypeBulkPayload,
   TransactionTypeBulkUpdateResponse,
   TransactionTypeClassificationRunResponse,
@@ -141,7 +142,15 @@ export async function deleteCategoryRule(ruleId: number): Promise<void> {
   await requestJson(`/api/category-rules/${ruleId}`, { method: "DELETE" });
 }
 
-export async function getAttention(limit = 100): Promise<AttentionListResponse> {
+export async function getStatementTerms(): Promise<StatementTerm[]> {
+  return requestJson<StatementTerm[]>("/api/statement-terms");
+}
+
+export async function confirmStatementTerm(termId: number): Promise<StatementTerm> {
+  return requestJson<StatementTerm>(`/api/statement-terms/${termId}/confirm`, { method: "POST" });
+}
+
+export async function getAttention(limit = 1000): Promise<AttentionListResponse> {
   const query = new URLSearchParams({ limit: String(limit) });
   return requestJson<AttentionListResponse>(`/api/attention?${query.toString()}`);
 }

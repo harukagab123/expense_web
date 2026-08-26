@@ -6,6 +6,7 @@ from app.models.statement import Statement
 from app.models.transaction import (
     CategoryRule,
     MerchantNormalizationRule,
+    StatementTerm,
     Transaction,
     TransactionExtraction,
     TransactionTypeRule,
@@ -17,6 +18,7 @@ __all__ = [
     "Folder",
     "InfrastructureCheck",
     "MerchantNormalizationRule",
+    "StatementTerm",
     "Statement",
     "StoredFile",
     "Transaction",

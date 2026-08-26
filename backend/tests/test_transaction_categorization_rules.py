@@ -1,6 +1,7 @@
 from app.services.transaction_categorization.base import (
     AUTO_GAS,
     BUSINESS_INTEREST_OTHER,
+    BUSINESS_BANK_MEMBERSHIP,
     BUSINESS_MEDICAL,
     BUSINESS_OFFICE_EXPENSE,
     BUSINESS_TOTAL_MEALS,
@@ -9,12 +10,10 @@ from app.services.transaction_categorization.base import (
     HOME_TELECOM_INTERNET,
     MAIN_AUTO_EXPENSE,
     MAIN_BUSINESS_USE_HOME,
-    MAIN_PERSONAL_INTERNAL,
     MAIN_PROFIT_LOSS_BUSINESS,
     STATUS_CATEGORIZED,
     STATUS_NEEDS_REVIEW,
     STATUS_NOT_APPLICABLE,
-    UNCATEGORIZED,
     CategoryClassificationInput,
     is_valid_category_pair,
 )
@@ -68,7 +67,6 @@ def test_exact_category_structure_and_valid_pairs() -> None:
             "Medical",
             "Education & Learning",
         ],
-        MAIN_PERSONAL_INTERNAL: ["Other Personal Items", "Personal", "Uncategorized"],
     }
     assert is_valid_category_pair(MAIN_AUTO_EXPENSE, AUTO_GAS)
     assert not is_valid_category_pair(MAIN_AUTO_EXPENSE, BUSINESS_OFFICE_EXPENSE)
@@ -90,8 +88,8 @@ def test_gas_and_ambiguous_retail_rules() -> None:
     amazon = categorize("AMZN MKTPL*AB12C3 AMZN.COM/BILL WA", normalized_name="Amazon")
 
     for result in [costco, amazon]:
-        assert result.main_category == MAIN_PERSONAL_INTERNAL
-        assert result.subcategory == UNCATEGORIZED
+        assert result.main_category == MAIN_PROFIT_LOSS_BUSINESS
+        assert result.subcategory in {BUSINESS_OFFICE_EXPENSE, "BUSINESS_OTHER_SUPPLIES"}
         assert result.status == STATUS_NEEDS_REVIEW
         assert result.confidence < 0.7
 
@@ -123,8 +121,8 @@ def test_interest_bank_fee_medical_office_meals_and_travel_rules() -> None:
     assert interest_out.subcategory == BUSINESS_INTEREST_OTHER
     assert interest_in.status == STATUS_NOT_APPLICABLE
 
-    assert bank_fee.main_category == MAIN_PERSONAL_INTERNAL
-    assert bank_fee.subcategory == UNCATEGORIZED
+    assert bank_fee.main_category == MAIN_PROFIT_LOSS_BUSINESS
+    assert bank_fee.subcategory == BUSINESS_BANK_MEMBERSHIP
     assert bank_fee.status == STATUS_NEEDS_REVIEW
 
     assert kaiser.main_category == MAIN_PROFIT_LOSS_BUSINESS
@@ -142,5 +140,5 @@ def test_telecom_requires_specific_context() -> None:
 
     assert comcast.main_category == MAIN_BUSINESS_USE_HOME
     assert comcast.subcategory == HOME_TELECOM_INTERNET
-    assert verizon_generic.main_category == MAIN_PERSONAL_INTERNAL
-    assert verizon_generic.subcategory == UNCATEGORIZED
+    assert verizon_generic.main_category == MAIN_PROFIT_LOSS_BUSINESS
+    assert verizon_generic.subcategory == "BUSINESS_OTHER_SUPPLIES"

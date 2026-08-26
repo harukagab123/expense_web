@@ -16,6 +16,7 @@ from app.schemas.analysis import (
 from app.schemas.statement import StatementResponse
 from app.schemas.transaction import TransactionExtractionResponse, TransactionResponse
 from app.services.source_retention import RetentionResult, apply_retention_for_statement
+from app.services.statement_terminology.service import interpret_transactions_for_statement
 from app.services.statement_detection.base import STATUS_FAILED as DETECTION_FAILED
 from app.services.statement_detection.service import detect_statement_for_file
 from app.services.transaction_categorization.service import categorize_transactions_for_statement
@@ -39,6 +40,7 @@ class _AnalysisState:
 
 STEP_DETECTION = "statement_detection"
 STEP_EXTRACTION = "transaction_extraction"
+STEP_TERMINOLOGY = "statement_terminology"
 STEP_NORMALIZATION = "transaction_normalization"
 STEP_TYPE_CLASSIFICATION = "transaction_type_classification"
 STEP_CATEGORIZATION = "transaction_categorization"
@@ -50,6 +52,7 @@ def analyze_statement_file(session: Session, file_id: int) -> StatementAnalysisR
     steps = [
         _AnalysisState(STEP_DETECTION, "Statement detection"),
         _AnalysisState(STEP_EXTRACTION, "Transaction extraction"),
+        _AnalysisState(STEP_TERMINOLOGY, "Interpret statement terminology"),
         _AnalysisState(STEP_NORMALIZATION, "Normalize transaction names"),
         _AnalysisState(STEP_TYPE_CLASSIFICATION, "Classify transaction types"),
         _AnalysisState(STEP_CATEGORIZATION, "Categorize eligible transactions"),
@@ -77,6 +80,17 @@ def analyze_statement_file(session: Session, file_id: int) -> StatementAnalysisR
         _skip_after_failure(steps, STEP_EXTRACTION)
         return _response("FAILED", STEP_EXTRACTION, statement, extraction, transactions, steps, retention)
     _complete(steps, STEP_EXTRACTION, f"{len(transactions)} transactions loaded.")
+
+    _start(steps, STEP_TERMINOLOGY)
+    try:
+        transactions = interpret_transactions_for_statement(session, statement.id)
+    except Exception:
+        session.rollback()
+        logger.exception("Statement analysis failed during terminology interpretation for statement_id=%s", statement.id)
+        _fail(steps, STEP_TERMINOLOGY, "Statement terminology interpretation failed.")
+        _skip_after_failure(steps, STEP_TERMINOLOGY)
+        return _response("FAILED", STEP_TERMINOLOGY, statement, extraction, transactions, steps, retention)
+    _complete(steps, STEP_TERMINOLOGY, "Statement terminology interpreted.")
 
     _start(steps, STEP_NORMALIZATION)
     try:

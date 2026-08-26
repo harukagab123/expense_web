@@ -6,7 +6,6 @@ from dataclasses import dataclass
 MAIN_AUTO_EXPENSE = "AUTO_EXPENSE"
 MAIN_BUSINESS_USE_HOME = "BUSINESS_USE_OF_HOME"
 MAIN_PROFIT_LOSS_BUSINESS = "PROFIT_LOSS_BUSINESS"
-MAIN_PERSONAL_INTERNAL = "PERSONAL_INTERNAL"
 
 AUTO_GAS = "AUTO_GAS"
 AUTO_INSURANCE = "AUTO_INSURANCE"
@@ -37,10 +36,6 @@ BUSINESS_DONATIONS = "BUSINESS_DONATIONS"
 BUSINESS_BANK_MEMBERSHIP = "BUSINESS_BANK_MEMBERSHIP"
 BUSINESS_MEDICAL = "BUSINESS_MEDICAL"
 BUSINESS_EDUCATION_LEARNING = "BUSINESS_EDUCATION_LEARNING"
-
-PERSONAL_OTHER_ITEMS = "PERSONAL_OTHER_ITEMS"
-PERSONAL = "PERSONAL"
-UNCATEGORIZED = "UNCATEGORIZED"
 
 SOURCE_RULE = "RULE"
 SOURCE_MERCHANT_RULE = "MERCHANT_RULE"
@@ -122,15 +117,6 @@ CATEGORY_CATALOG: tuple[MainCategoryDefinition, ...] = (
             SubcategoryDefinition(BUSINESS_EDUCATION_LEARNING, "Education & Learning"),
         ),
     ),
-    MainCategoryDefinition(
-        MAIN_PERSONAL_INTERNAL,
-        "PERSONAL / INTERNAL",
-        (
-            SubcategoryDefinition(PERSONAL_OTHER_ITEMS, "Other Personal Items"),
-            SubcategoryDefinition(PERSONAL, "Personal"),
-            SubcategoryDefinition(UNCATEGORIZED, "Uncategorized"),
-        ),
-    ),
 )
 
 CATEGORY_IDS = {category.id for category in CATEGORY_CATALOG}
@@ -163,6 +149,7 @@ class CategoryClassificationInput:
     direction: str
     statement_institution: str
     account_type: str
+    interpreted_detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -186,16 +173,6 @@ def is_category_eligible(transaction_type: str, direction: str) -> bool:
     if transaction_type == "INTEREST":
         return direction == "OUTFLOW"
     return transaction_type in ELIGIBLE_TRANSACTION_TYPES
-
-
-def uncategorized_result(confidence: float = 0.35) -> CategoryClassificationResult:
-    return CategoryClassificationResult(
-        main_category=MAIN_PERSONAL_INTERNAL,
-        subcategory=UNCATEGORIZED,
-        confidence=confidence,
-        source=SOURCE_UNRESOLVED,
-        status=STATUS_NEEDS_REVIEW,
-    )
 
 
 def not_applicable_result() -> CategoryClassificationResult:

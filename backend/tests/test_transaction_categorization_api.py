@@ -73,15 +73,20 @@ def test_categorize_statement_separates_expenses_from_non_expenses(client: TestC
     assert chevron["category_confidence"] >= 0.9
 
     assert (costco_gas["main_category"], costco_gas["subcategory"]) == ("AUTO_EXPENSE", "AUTO_GAS")
-    assert (costco["main_category"], costco["subcategory"]) == ("PERSONAL_INTERNAL", "UNCATEGORIZED")
+    assert (costco["main_category"], costco["subcategory"]) == ("PROFIT_LOSS_BUSINESS", "BUSINESS_OTHER_SUPPLIES")
     assert costco["category_status"] == "NEEDS_REVIEW"
-    assert (amazon["main_category"], amazon["subcategory"]) == ("PERSONAL_INTERNAL", "UNCATEGORIZED")
+    assert (amazon["main_category"], amazon["subcategory"]) == ("PROFIT_LOSS_BUSINESS", "BUSINESS_OFFICE_EXPENSE")
     assert amazon["category_status"] == "NEEDS_REVIEW"
 
     for transaction in [capital_one, zelle, check]:
         assert transaction["main_category"] is None
         assert transaction["subcategory"] is None
         assert transaction["category_status"] == "NOT_APPLICABLE"
+
+    for transaction in transactions:
+        if transaction["transaction_type"] in {"EXPENSE", "BANK_FEE"}:
+            assert transaction["main_category"] is not None
+            assert transaction["subcategory"] is not None
 
 
 def test_manual_category_edit_preserves_original_and_survives_recategorization(client: TestClient) -> None:
@@ -100,8 +105,8 @@ def test_manual_category_edit_preserves_original_and_survives_recategorization(c
     assert edited["subcategory"] == "BUSINESS_OFFICE_EXPENSE"
     assert edited["category_source"] == "USER_EDITED"
     assert edited["category_status"] == "USER_CONFIRMED"
-    assert edited["original_main_category"] == "PERSONAL_INTERNAL"
-    assert edited["original_subcategory"] == "UNCATEGORIZED"
+    assert edited["original_main_category"] == "PROFIT_LOSS_BUSINESS"
+    assert edited["original_subcategory"] == "BUSINESS_OFFICE_EXPENSE"
 
     saved = by_detail(recategorized.json()["transactions"], "AMZN MKTPL*AB12C3 AMZN.COM/BILL WA")
     assert saved["main_category"] == "PROFIT_LOSS_BUSINESS"
@@ -149,8 +154,8 @@ def test_type_changes_update_category_eligibility(client: TestClient) -> None:
     assert zelle_type_edit.status_code == 200, zelle_type_edit.text
     zelle_after = by_detail(zelle_categorized.json()["transactions"], "ZELLE PAYMENT TO LAWRENCE VIZCONDE")
     assert zelle_after["transaction_type"] == "EXPENSE"
-    assert zelle_after["main_category"] == "PERSONAL_INTERNAL"
-    assert zelle_after["subcategory"] == "UNCATEGORIZED"
+    assert zelle_after["main_category"] == "PROFIT_LOSS_BUSINESS"
+    assert zelle_after["subcategory"] == "BUSINESS_OTHER_SUPPLIES"
     assert zelle_after["category_status"] == "NEEDS_REVIEW"
 
     assert chevron_type_edit.status_code == 200, chevron_type_edit.text
@@ -211,11 +216,21 @@ def test_category_validation_excluded_rows_and_manual_rows(client: TestClient) -
         f"/api/transactions/{manual['id']}/category",
         json={"main_category": "AUTO_EXPENSE", "subcategory": "BUSINESS_OFFICE_EXPENSE"},
     )
+    removed_category = client.patch(
+        f"/api/transactions/{manual['id']}/category",
+        json={"main_category": "PERSONAL_INTERNAL", "subcategory": "UNCATEGORIZED"},
+    )
+    removed_subcategory = client.patch(
+        f"/api/transactions/{manual['id']}/category",
+        json={"main_category": "PROFIT_LOSS_BUSINESS", "subcategory": "PERSONAL_OTHER_ITEMS"},
+    )
     categorized = client.post(f"/api/statements/{statement['id']}/categorize-transactions")
     lookup = client.get(f"/api/statements/{statement['id']}/transactions?include_excluded=true")
 
     assert exclude.status_code == 200
     assert invalid_pair.status_code == 422
+    assert removed_category.status_code == 422
+    assert removed_subcategory.status_code == 422
     manual_row = by_detail(categorized.json()["transactions"], "OFFICE DEPOT 4321")
     assert manual_row["subcategory"] == "BUSINESS_OFFICE_EXPENSE"
 

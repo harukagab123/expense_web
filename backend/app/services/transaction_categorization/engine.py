@@ -10,7 +10,6 @@ from app.services.transaction_categorization.base import (
     MATCH_REGEX,
     SOURCE_LEARNED_RULE,
     STATUS_CATEGORIZED,
-    STATUS_NEEDS_REVIEW,
     CategoryClassificationInput,
     CategoryClassificationResult,
     UserCategoryRule,
@@ -64,7 +63,7 @@ def _match_user_rule(
             rule.subcategory,
             0.98,
             source=SOURCE_LEARNED_RULE,
-            status=STATUS_CATEGORIZED if rule.subcategory != "UNCATEGORIZED" else STATUS_NEEDS_REVIEW,
+            status=STATUS_CATEGORIZED,
             rule_id=rule.id,
         )
     return None

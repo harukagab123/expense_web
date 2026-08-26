@@ -31,7 +31,11 @@ def normalize_transactions_for_statement(session: Session, statement_id: int) ->
         if transaction.user_edited_normalization:
             continue
 
-        result = normalize_transaction_detail(transaction.transaction_detail, rules)
+        result = normalize_transaction_detail(
+            transaction.transaction_detail,
+            rules,
+            interpreted_detail=transaction.interpreted_detail,
+        )
         _preserve_original_normalization(transaction, result)
         previous_state = (
             transaction.normalized_name,

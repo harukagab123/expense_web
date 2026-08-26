@@ -18,6 +18,7 @@ KNOWN_MERCHANT_PATTERNS: tuple[MerchantPattern, ...] = (
     MerchantPattern(re.compile(r"\bTJX\s+REW(?:ARDS)?\s+M(?:STRCRD|ASTERCARD)\b"), "TJX Rewards Mastercard", 0.98),
     MerchantPattern(re.compile(r"\bCOSTCO\s+GAS\b"), "Costco Gas", 0.99),
     MerchantPattern(re.compile(r"\bCOSTCO\s+(?:WHSE|WHOLESALE|#|\d|\b)"), "Costco", 0.97),
+    MerchantPattern(re.compile(r"\bAMAZON\s+MARKETPLACE\b"), "Amazon Marketplace", 0.98),
     MerchantPattern(re.compile(r"\b(?:AMZN\s+MKTPL|AMAZON\s+MKTPLACE|AMAZON\.COM|AMZN\.COM/BILL|AMAZON\s+MKTPLACE\s+PMTS)\b"), "Amazon", 0.98),
     MerchantPattern(re.compile(r"\bCHEVRON\b"), "Chevron", 0.99),
     MerchantPattern(re.compile(r"\bSHELL(?:\s+OIL)?\b"), "Shell", 0.98),
@@ -33,7 +34,7 @@ KNOWN_MERCHANT_PATTERNS: tuple[MerchantPattern, ...] = (
     MerchantPattern(re.compile(r"\bOFFICE\s*DEPOT\b|\bOFFICEDEPOT\b"), "Office Depot", 0.96),
     MerchantPattern(re.compile(r"\bSTAPLES\b"), "Staples", 0.95),
     MerchantPattern(re.compile(r"\bCAPITAL\s+ONE\s+(?:MOBILE\s+)?PMT\b|\bCAPITAL\s+ONE\b"), "Capital One", 0.93),
-    MerchantPattern(re.compile(r"\bAMERICAN\s+EXPRESS\s+(?:ACH\s+)?PMT\b|\bAMERICAN\s+EXPRESS\b"), "American Express", 0.93),
+    MerchantPattern(re.compile(r"\bAMERICAN\s+EXPRESS\s+(?:ACH\s+)?(?:PMT|PAYMENT)\b|\bAMERICAN\s+EXPRESS\b"), "American Express", 0.93),
     MerchantPattern(re.compile(r"\bCHASE\s+(?:CARD\s+)?PMT\b|\bPAYMENT\s+TO\s+CHASE\s+CARD\b"), "Chase", 0.9),
 )
 

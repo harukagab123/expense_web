@@ -19,6 +19,7 @@ from app.services.transaction_categorization.base import (
     BUSINESS_LEGAL_PROFESSIONAL,
     BUSINESS_MATERIALS,
     BUSINESS_MEDICAL,
+    BUSINESS_BANK_MEMBERSHIP,
     BUSINESS_OFFICE_EXPENSE,
     BUSINESS_OTHER_SUPPLIES,
     BUSINESS_TOTAL_MEALS,
@@ -32,14 +33,11 @@ from app.services.transaction_categorization.base import (
     HOME_UTILITIES,
     MAIN_AUTO_EXPENSE,
     MAIN_BUSINESS_USE_HOME,
-    MAIN_PERSONAL_INTERNAL,
     MAIN_PROFIT_LOSS_BUSINESS,
     STATUS_NEEDS_REVIEW,
-    UNCATEGORIZED,
     categorized_result,
     is_category_eligible,
     not_applicable_result,
-    uncategorized_result,
 )
 from app.services.transaction_normalization.text import normalized_for_match
 
@@ -289,13 +287,6 @@ EXPENSE_RULES: tuple[DeterministicCategoryRule, ...] = (
     ),
 )
 
-AMBIGUOUS_EXPENSE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bAMAZON\b"),
-    re.compile(r"\bAMZN\b"),
-    re.compile(r"^\bCOSTCO\b(?!.*\bGAS\b)"),
-)
-
-
 def match_known_category_rule(
     classification_input: CategoryClassificationInput,
 ) -> CategoryClassificationResult:
@@ -305,7 +296,12 @@ def match_known_category_rule(
     text = _combined_text(classification_input)
 
     if classification_input.transaction_type == "BANK_FEE":
-        return uncategorized_result(confidence=0.45)
+        return categorized_result(
+            MAIN_PROFIT_LOSS_BUSINESS,
+            BUSINESS_BANK_MEMBERSHIP,
+            0.58,
+            status=STATUS_NEEDS_REVIEW,
+        )
     if classification_input.transaction_type == "INTEREST":
         return categorized_result(
             MAIN_PROFIT_LOSS_BUSINESS,
@@ -322,16 +318,36 @@ def match_known_category_rule(
                 status=rule.status,
             )
 
-    if _matches_any(text, AMBIGUOUS_EXPENSE_PATTERNS):
-        return uncategorized_result(confidence=0.35)
+    return _best_supported_fallback(text)
 
-    return uncategorized_result(confidence=0.35)
+
+def _best_supported_fallback(text: str) -> CategoryClassificationResult:
+    candidates = {
+        (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OTHER_SUPPLIES): 0.30,
+        (MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OFFICE_EXPENSE): 0.24,
+    }
+    if re.search(r"\b(?:AMAZON|AMZN)\b", text):
+        candidates[(MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OFFICE_EXPENSE)] += 0.19
+        candidates[(MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OTHER_SUPPLIES)] += 0.11
+    if re.search(r"\bCOSTCO\b.*\b(?:WAREHOUSE|WHSE)\b|\bCOSTCO\b", text):
+        candidates[(MAIN_PROFIT_LOSS_BUSINESS, BUSINESS_OTHER_SUPPLIES)] += 0.14
+    (main_category, subcategory), confidence = max(
+        candidates.items(),
+        key=lambda candidate: (candidate[1], candidate[0][0], candidate[0][1]),
+    )
+    return categorized_result(
+        main_category,
+        subcategory,
+        confidence,
+        status=STATUS_NEEDS_REVIEW,
+    )
 
 
 def _combined_text(classification_input: CategoryClassificationInput) -> str:
     values = [
         classification_input.normalized_name or "",
         classification_input.transaction_detail,
+        classification_input.interpreted_detail or "",
     ]
     return normalized_for_match(" ".join(values))
 

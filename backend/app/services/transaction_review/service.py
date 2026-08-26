@@ -90,7 +90,6 @@ def transaction_needs_review(transaction: Transaction) -> bool:
         or transaction.transaction_type == "UNKNOWN"
         or transaction.suggested_include == "REVIEW"
         or transaction.category_status in {"NEEDS_REVIEW", "NOT_CATEGORIZED"}
-        or transaction.subcategory == "UNCATEGORIZED"
     )
 
 
@@ -178,6 +177,10 @@ def update_transaction_review(
         else REVIEW_USER_MARKED_NEEDS_REVIEW
     )
     transaction.review_updated_at = datetime.now(UTC)
+    if payload.review_status == REVIEW_REVIEWED and transaction.main_category and transaction.subcategory:
+        from app.services.statement_terminology.service import confirm_terms_from_category
+
+        confirm_terms_from_category(session, transaction, transaction.main_category, transaction.subcategory)
     session.commit()
     session.refresh(transaction)
     return transaction
@@ -206,6 +209,10 @@ def bulk_update_transaction_review(
             else REVIEW_USER_MARKED_NEEDS_REVIEW
         )
         transaction.review_updated_at = now
+        if payload.review_status == REVIEW_REVIEWED and transaction.main_category and transaction.subcategory:
+            from app.services.statement_terminology.service import confirm_terms_from_category
+
+            confirm_terms_from_category(session, transaction, transaction.main_category, transaction.subcategory)
 
     session.commit()
     for transaction in transactions:

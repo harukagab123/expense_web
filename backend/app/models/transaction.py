@@ -100,6 +100,7 @@ class CategoryRule(Base):
     subcategory: Mapped[str] = mapped_column(String(64), nullable=False)
     match_type: Mapped[str] = mapped_column(String(32), nullable=False, default="EXACT")
     times_confirmed: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    active: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -113,6 +114,29 @@ class CategoryRule(Base):
     )
 
     transactions: Mapped[list[Transaction]] = relationship("Transaction", back_populates="category_rule")
+
+
+class StatementTerm(Base):
+    __tablename__ = "statement_terms"
+    __table_args__ = (
+        UniqueConstraint("term", "institution", "context", name="uq_statement_term_scope_context"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    term: Mapped[str] = mapped_column(String(120), nullable=False)
+    normalized_meaning: Mapped[str] = mapped_column(String(255), nullable=False)
+    institution: Mapped[str] = mapped_column(String(64), nullable=False, default="GLOBAL")
+    context: Mapped[str] = mapped_column(String(255), nullable=False, default="ANY")
+    confidence: Mapped[float] = mapped_column(Float(), nullable=False, default=0.5)
+    times_seen: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    times_confirmed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="SYSTEM_LEARNED")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class Transaction(Base):
@@ -147,6 +171,10 @@ class Transaction(Base):
     original_direction: Mapped[str | None] = mapped_column(String(24), nullable=True)
     original_source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
     original_source_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    interpreted_detail: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    terminology_confidence: Mapped[float] = mapped_column(Float(), nullable=False, default=0.0)
+    terminology_matches: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    terminology_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     normalized_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     normalization_confidence: Mapped[float] = mapped_column(Float(), nullable=False, default=0.0)
     normalization_source: Mapped[str] = mapped_column(String(32), nullable=False, default="UNRESOLVED")

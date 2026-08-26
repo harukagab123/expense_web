@@ -272,15 +272,15 @@ def test_bulk_review_accepts_unknown_transaction_type_list(client: TestClient) -
     assert after.json()["total"] == 0
 
 
-def test_reviewed_uncategorized_transaction_is_accepted_and_resolved(client: TestClient) -> None:
-    file = upload_pdf(client, "reviewed-uncategorized.pdf")
+def test_reviewed_low_confidence_category_is_accepted_and_resolved(client: TestClient) -> None:
+    file = upload_pdf(client, "reviewed-low-confidence.pdf")
     statement_id = create_statement(file["id"])
     transaction_id = add_transaction(
         statement_id,
         "Amazon",
         category_status="NEEDS_REVIEW",
-        main_category="PERSONAL_INTERNAL",
-        subcategory="UNCATEGORIZED",
+        main_category="PROFIT_LOSS_BUSINESS",
+        subcategory="BUSINESS_OFFICE_EXPENSE",
     )
 
     before = client.get("/api/attention")
@@ -290,7 +290,7 @@ def test_reviewed_uncategorized_transaction_is_accepted_and_resolved(client: Tes
     assert before.status_code == 200
     assert {item["attention_type"] for item in before.json()["items"]} == {
         "BANK_STATEMENT_REVIEW_REQUIRED",
-        "CATEGORY_UNCATEGORIZED",
+        "CATEGORY_NEEDS_REVIEW",
     }
     assert reviewed.status_code == 200, reviewed.text
     assert after.json()["total"] == 0

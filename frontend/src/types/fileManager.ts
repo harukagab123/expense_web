@@ -131,8 +131,7 @@ export type TransactionTypeValue =
 export type CategoryMainValue =
   | "AUTO_EXPENSE"
   | "BUSINESS_USE_OF_HOME"
-  | "PROFIT_LOSS_BUSINESS"
-  | "PERSONAL_INTERNAL";
+  | "PROFIT_LOSS_BUSINESS";
 
 export type CategorySubcategoryValue =
   | "AUTO_GAS"
@@ -161,10 +160,7 @@ export type CategorySubcategoryValue =
   | "BUSINESS_DONATIONS"
   | "BUSINESS_BANK_MEMBERSHIP"
   | "BUSINESS_MEDICAL"
-  | "BUSINESS_EDUCATION_LEARNING"
-  | "PERSONAL_OTHER_ITEMS"
-  | "PERSONAL"
-  | "UNCATEGORIZED";
+  | "BUSINESS_EDUCATION_LEARNING";
 
 export type ReviewStatusValue = "PENDING" | "NEEDS_REVIEW" | "REVIEWED";
 
@@ -190,6 +186,10 @@ export type StatementTransaction = {
   original_direction: string | null;
   original_source_page: number | null;
   original_source_order: number | null;
+  interpreted_detail: string | null;
+  terminology_confidence: number;
+  terminology_matches: string | null;
+  terminology_updated_at: string | null;
   normalized_name: string | null;
   normalization_confidence: number;
   normalization_source: string;
@@ -370,6 +370,20 @@ export type CategoryRule = {
 export type CategoryRulePayload = {
   main_category: CategoryMainValue;
   subcategory: CategorySubcategoryValue;
+};
+
+export type StatementTerm = {
+  id: number;
+  term: string;
+  normalized_meaning: string;
+  institution: string;
+  context: string;
+  confidence: number;
+  times_seen: number;
+  times_confirmed: number;
+  source: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type TransactionCategoryBulkPayload = {

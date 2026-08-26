@@ -9,6 +9,7 @@ import {
   bulkUpdateTransactionInclusion,
   createTransactionForStatement,
   createFolder,
+  confirmStatementTerm,
   deleteCategoryRule,
   deleteFolder,
   deleteStoredFile,
@@ -20,6 +21,7 @@ import {
   getCategoryRules,
   getFileManagerTree,
   getStatementForFile,
+  getStatementTerms,
   getTransactionsForStatement,
   searchFileManager,
   updateFolder,
@@ -45,6 +47,7 @@ import type {
   StatementDetection,
   StatementUpdate,
   StatementTransaction,
+  StatementTerm,
   StoredFile,
   CategoryMainValue,
   CategoryRule,
@@ -132,8 +135,6 @@ type CategoryFilter =
   | "auto"
   | "home"
   | "business"
-  | "personal"
-  | "uncategorized"
   | "needs_review"
   | "not_applicable";
 
@@ -264,7 +265,6 @@ const categoryLabels: Record<string, string> = {
   AUTO_EXPENSE: "AUTO EXPENSE",
   BUSINESS_USE_OF_HOME: "BUSINESS USE OF HOME",
   PROFIT_LOSS_BUSINESS: "PROFIT OR LOSS FROM BUSINESS",
-  PERSONAL_INTERNAL: "PERSONAL / INTERNAL",
 };
 
 const subcategoryLabels: Record<string, string> = {
@@ -295,9 +295,6 @@ const subcategoryLabels: Record<string, string> = {
   BUSINESS_BANK_MEMBERSHIP: "Bank Membership",
   BUSINESS_MEDICAL: "Medical",
   BUSINESS_EDUCATION_LEARNING: "Education & Learning",
-  PERSONAL_OTHER_ITEMS: "Other Personal Items",
-  PERSONAL: "Personal",
-  UNCATEGORIZED: "Uncategorized",
 };
 
 const categoryStatusLabels: Record<string, string> = {
@@ -388,15 +385,6 @@ const categoryOptions: Array<{ value: CategoryMainValue; label: string; subcateg
       { value: "BUSINESS_EDUCATION_LEARNING", label: "Education & Learning" },
     ],
   },
-  {
-    value: "PERSONAL_INTERNAL",
-    label: "PERSONAL / INTERNAL",
-    subcategories: [
-      { value: "PERSONAL_OTHER_ITEMS", label: "Other Personal Items" },
-      { value: "PERSONAL", label: "Personal" },
-      { value: "UNCATEGORIZED", label: "Uncategorized" },
-    ],
-  },
 ];
 
 const categoryFilterOptions: Array<{ value: CategoryFilter; label: string }> = [
@@ -404,8 +392,6 @@ const categoryFilterOptions: Array<{ value: CategoryFilter; label: string }> = [
   { value: "auto", label: "Auto Expense" },
   { value: "home", label: "Business Use of Home" },
   { value: "business", label: "Profit or Loss From Business" },
-  { value: "personal", label: "Personal / Internal" },
-  { value: "uncategorized", label: "Uncategorized" },
   { value: "needs_review", label: "Needs Review" },
   { value: "not_applicable", label: "Not Applicable" },
 ];
@@ -510,7 +496,7 @@ function subcategoryOptionsFor(mainCategory: CategoryMainValue): Array<{ value: 
 }
 
 function defaultSubcategoryFor(mainCategory: CategoryMainValue): CategorySubcategoryValue {
-  return subcategoryOptionsFor(mainCategory)[0]?.value ?? "UNCATEGORIZED";
+  return subcategoryOptionsFor(mainCategory)[0]?.value ?? "BUSINESS_OTHER_SUPPLIES";
 }
 
 function categoryStatus(transaction: StatementTransaction): string {
@@ -546,14 +532,13 @@ function categoryPairLabel(transaction: StatementTransaction): string {
     return "Not Applicable";
   }
   if (!mainCategory || !subcategory) {
-    return "Uncategorized";
+    return "Needs Review";
   }
   return `${labelFor(categoryLabels, mainCategory)} / ${labelFor(subcategoryLabels, subcategory)}`;
 }
 
 function transactionMatchesCategoryFilter(transaction: StatementTransaction, filter: CategoryFilter): boolean {
   const mainCategory = categoryMainValue(transaction);
-  const subcategory = categorySubcategoryValue(transaction);
   const status = categoryStatus(transaction);
   if (filter === "all") {
     return true;
@@ -566,12 +551,6 @@ function transactionMatchesCategoryFilter(transaction: StatementTransaction, fil
   }
   if (filter === "business") {
     return mainCategory === "PROFIT_LOSS_BUSINESS";
-  }
-  if (filter === "personal") {
-    return mainCategory === "PERSONAL_INTERNAL";
-  }
-  if (filter === "uncategorized") {
-    return subcategory === "UNCATEGORIZED" || status === "NOT_CATEGORIZED";
   }
   if (filter === "needs_review") {
     return status === "NEEDS_REVIEW";
@@ -619,8 +598,7 @@ function transactionNeedsPhase8Review(transaction: StatementTransaction): boolea
     transactionNormalizationStatus(transaction) === "NEEDS_REVIEW" ||
     transactionSuggestedInclude(transaction) === "REVIEW" ||
     categoryStatus(transaction) === "NEEDS_REVIEW" ||
-    categoryStatus(transaction) === "NOT_CATEGORIZED" ||
-    categorySubcategoryValue(transaction) === "UNCATEGORIZED"
+    categoryStatus(transaction) === "NOT_CATEGORIZED"
   );
 }
 
@@ -766,7 +744,7 @@ function transactionPayloadFromValues(values: TransactionFormValues): Required<T
 }
 
 function inlineEditValuesFromTransaction(transaction: StatementTransaction): InlineTransactionEditValues {
-  const mainCategory = categoryMainValue(transaction) ?? "PERSONAL_INTERNAL";
+  const mainCategory = categoryMainValue(transaction) ?? "PROFIT_LOSS_BUSINESS";
   const subcategory = categorySubcategoryValue(transaction);
   const validSubcategories = subcategoryOptionsFor(mainCategory);
   return {
@@ -2809,8 +2787,8 @@ function TransactionPanel({
   const [inclusionFilter, setInclusionFilter] = useState<InclusionFilter>("all");
   const [selectedTransactionIds, setSelectedTransactionIds] = useState<Set<number>>(new Set());
   const [bulkCategoryFormValues, setBulkCategoryFormValues] = useState<BulkCategoryFormValues>({
-    main_category: "PERSONAL_INTERNAL",
-    subcategory: "UNCATEGORIZED",
+    main_category: "PROFIT_LOSS_BUSINESS",
+    subcategory: "BUSINESS_OTHER_SUPPLIES",
     overwrite_user_edits: false,
   });
   const [bulkCategoryError, setBulkCategoryError] = useState("");
@@ -3352,10 +3330,12 @@ function TransactionPanel({
       : "";
   }
 
-  function attentionCellClass(field: string, extraClass = ""): string {
+  function attentionCellClass(transactionId: number, field: string, extraClass = ""): string {
     return [
       extraClass,
-      activeAttentionFocus?.targetField === field ? "transaction-cell--attention" : "",
+      activeAttentionFocus?.transactionId === transactionId && activeAttentionFocus.targetField === field
+        ? "transaction-cell--attention"
+        : "",
     ].filter(Boolean).join(" ");
   }
 
@@ -3796,7 +3776,7 @@ function TransactionPanel({
                         type="checkbox"
                       />
                     </td>
-                    <td className={attentionCellClass("transaction_date")}>
+                    <td className={attentionCellClass(transaction.id, "transaction_date")}>
                       {editValues ? (
                         <input
                           className="transaction-inline-input"
@@ -3809,7 +3789,7 @@ function TransactionPanel({
                         formatDateOnly(transaction.transaction_date)
                       )}
                     </td>
-                    <td className={attentionCellClass("normalized_name")}>
+                    <td className={attentionCellClass(transaction.id, "normalized_name")}>
                       {editValues ? (
                         <input
                           className="transaction-inline-input"
@@ -3839,7 +3819,7 @@ function TransactionPanel({
                         <span className="transaction-badge">Name review</span>
                       ) : null}
                     </td>
-                    <td className={attentionCellClass("main_category")}>
+                    <td className={attentionCellClass(transaction.id, "main_category")}>
                       {editValues ? (
                         <select
                           className="transaction-inline-input"
@@ -3861,7 +3841,7 @@ function TransactionPanel({
                             ? labelFor(categoryLabels, currentMainCategory)
                             : currentCategoryStatus === "NOT_APPLICABLE"
                               ? "Not Applicable"
-                              : "Uncategorized"}
+                              : "Needs Review"}
                         </span>
                       )}
                       <span className="transaction-category-meta">
@@ -3876,7 +3856,7 @@ function TransactionPanel({
                       ) : null}
                       {needsCategoryReview ? <span className="transaction-badge">Category review</span> : null}
                     </td>
-                    <td className={attentionCellClass("subcategory")}>
+                    <td className={attentionCellClass(transaction.id, "subcategory")}>
                       {editValues ? (
                         <select
                           className="transaction-inline-input"
@@ -3898,7 +3878,7 @@ function TransactionPanel({
                         </span>
                       )}
                     </td>
-                    <td className={attentionCellClass("transaction_detail")}>
+                    <td className={attentionCellClass(transaction.id, "transaction_detail")}>
                       {editValues ? (
                         <input
                           className="transaction-inline-input"
@@ -3914,7 +3894,7 @@ function TransactionPanel({
                         <span className="transaction-source">Page {transaction.source_page}</span>
                       ) : null}
                     </td>
-                    <td className={attentionCellClass("direction")}>
+                    <td className={attentionCellClass(transaction.id, "direction")}>
                       {editValues ? (
                         <select
                           className="transaction-inline-input"
@@ -3934,7 +3914,7 @@ function TransactionPanel({
                         labelFor(directionLabels, String(transaction.direction))
                       )}
                     </td>
-                    <td className={attentionCellClass("amount", "transaction-table__amount")}>
+                    <td className={attentionCellClass(transaction.id, "amount", "transaction-table__amount")}>
                       {editValues ? (
                         <input
                           className="transaction-inline-input transaction-inline-input--amount"
@@ -4061,12 +4041,13 @@ function TransactionPanel({
 
 function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
   const [rules, setRules] = useState<CategoryRule[]>([]);
+  const [terms, setTerms] = useState<StatementTerm[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const [editValues, setEditValues] = useState<CategoryFormValues>({
-    main_category: "PERSONAL_INTERNAL",
-    subcategory: "UNCATEGORIZED",
+    main_category: "PROFIT_LOSS_BUSINESS",
+    subcategory: "BUSINESS_OTHER_SUPPLIES",
     use_for_future: false,
   });
 
@@ -4074,7 +4055,9 @@ function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
     setIsLoading(true);
     setError("");
     try {
-      setRules(await getCategoryRules());
+      const [nextRules, nextTerms] = await Promise.all([getCategoryRules(), getStatementTerms()]);
+      setRules(nextRules);
+      setTerms(nextTerms);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Learned rules could not be loaded.");
     } finally {
@@ -4087,7 +4070,7 @@ function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
   }, [loadRules]);
 
   function startRuleEdit(rule: CategoryRule) {
-    const mainCategory = isCategoryMainValue(rule.main_category) ? rule.main_category : "PERSONAL_INTERNAL";
+    const mainCategory = isCategoryMainValue(rule.main_category) ? rule.main_category : "PROFIT_LOSS_BUSINESS";
     const subcategory = isCategorySubcategoryValue(rule.subcategory)
       ? rule.subcategory
       : defaultSubcategoryFor(mainCategory);
@@ -4133,6 +4116,15 @@ function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function confirmTerm(term: StatementTerm) {
+    try {
+      await confirmStatementTerm(term.id);
+      await loadRules();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Statement terminology could not be confirmed.");
+    }
+  }
+
   return (
     <div className="modal-backdrop" role="presentation">
       <section aria-label="Learned category rules" aria-modal="true" className="learned-rules-dialog" role="dialog">
@@ -4168,6 +4160,33 @@ function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
                         <button className="danger-button" onClick={() => void removeRule(rule)} type="button">Delete</button>
                       </div>
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        <div className="learned-rules-dialog__header">
+          <div>
+            <h2>Statement Terminology</h2>
+            <p>Token and phrase meanings are scoped by institution and strengthen with confirmation.</p>
+          </div>
+        </div>
+        {terms.length > 0 ? (
+          <div className="learned-rules-table-wrap">
+            <table className="learned-rules-table">
+              <thead>
+                <tr><th>Term</th><th>Meaning</th><th>Institution</th><th>Seen</th><th>Confirmed</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                {terms.map((term) => (
+                  <tr key={term.id}>
+                    <td>{term.term}</td>
+                    <td>{term.normalized_meaning}</td>
+                    <td>{term.institution}</td>
+                    <td>{term.times_seen}</td>
+                    <td>{term.times_confirmed}</td>
+                    <td><button onClick={() => void confirmTerm(term)} type="button">Confirm Meaning</button></td>
                   </tr>
                 ))}
               </tbody>

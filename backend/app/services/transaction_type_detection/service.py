@@ -43,6 +43,7 @@ def classify_transaction_types_for_statement(session: Session, statement_id: int
                 direction=transaction.direction,
                 statement_institution=statement.institution,
                 account_type=statement.account_type,
+                interpreted_detail=transaction.interpreted_detail,
             ),
             rules,
         )

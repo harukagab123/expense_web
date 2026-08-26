@@ -27,9 +27,11 @@ from app.services.transaction_type_detection.base import (
 
 
 CREDIT_CARD_PAYMENT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bAMEX\b.*\bACH\b.*\b(?:PMT|PAYMENT)\b"),
     re.compile(r"\bPAYMENT\s+TO\s+CHASE\s+CARD\b"),
     re.compile(r"\bCHASE\s+CREDIT\s+(?:CRD|CARD)\s+AUTOPAY\b"),
     re.compile(r"\bCAPITAL\s+ONE\b.*\b(?:MOBILE\s+)?PMT\b"),
+    re.compile(r"\bCAPITAL\s+ONE\b.*\b(?:CRCARDPMT|CREDIT\s+CARD\s+PMT)\b"),
     re.compile(r"\bAMERICAN\s+EXPRESS\b.*\b(?:ACH\s+)?PMT\b"),
     re.compile(r"\bTJX\s+REW(?:ARDS)?\s+M(?:STRCRD|ASTERCARD)\b.*\b(?:SYF\s+)?PAYM?NT\b"),
     re.compile(r"\bMACY'?S\b.*\b(?:AUTO\s+)?PY?MT\b"),
@@ -90,7 +92,13 @@ GENERIC_UNKNOWN_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 
 def match_known_type_rule(classification_input: TypeClassificationInput) -> TypeClassificationResult | None:
-    raw = normalized_for_match(classification_input.transaction_detail)
+    raw = normalized_for_match(
+        " ".join(
+            value
+            for value in (classification_input.transaction_detail, classification_input.interpreted_detail or "")
+            if value
+        )
+    )
     name = normalized_for_match(classification_input.normalized_name or "")
     direction = classification_input.direction
 
@@ -114,6 +122,10 @@ def match_known_type_rule(classification_input: TypeClassificationInput) -> Type
         status = STATUS_CLASSIFIED if direction in {"INFLOW", "OUTFLOW"} else STATUS_NEEDS_REVIEW
         confidence = 0.78 if status == STATUS_CLASSIFIED else 0.52
         return _result(TYPE_TRANSFER, confidence, direction, status=status)
+    if re.search(r"\bAUTOMATIC\s+PAYMENT\b", raw):
+        return _result(TYPE_UNKNOWN, 0.58, direction, status=STATUS_NEEDS_REVIEW)
+    if re.search(r"\bACH\s+PAYMENT\b", raw):
+        return _result(TYPE_TRANSFER, 0.68, direction, status=STATUS_NEEDS_REVIEW)
     if raw.startswith("PAYMENT RECEIVED"):
         return _result(TYPE_OTHER, 0.62, direction, status=STATUS_NEEDS_REVIEW)
     if _matches_any(raw, INTEREST_PATTERNS):

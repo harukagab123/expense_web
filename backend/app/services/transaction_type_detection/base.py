@@ -66,6 +66,7 @@ class TypeClassificationInput:
     direction: str
     statement_institution: str
     account_type: str
+    interpreted_detail: str | None = None
 
 
 @dataclass(frozen=True)

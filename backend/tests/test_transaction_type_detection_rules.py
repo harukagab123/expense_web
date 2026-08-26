@@ -35,6 +35,7 @@ def test_credit_card_payments_are_not_expenses() -> None:
     examples = [
         "PAYMENT TO CHASE CARD ENDING IN 3792",
         "CAPITAL ONE MOBILE PMT",
+        "CAPITAL ONE CRCARDPMT CA0E5A1F1CCA800",
         "AMERICAN EXPRESS ACH PMT",
         "TJX REW MSTRCRD SYF PAYMNT",
         "MACYS AUTO PYMT",

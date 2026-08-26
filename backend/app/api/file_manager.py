@@ -28,6 +28,7 @@ from app.schemas.transaction import (
     CategoryCatalogResponse,
     CategoryRuleResponse,
     CategoryRuleUpdate,
+    StatementTermResponse,
     TransactionCreate,
     TransactionCategorizationRunResponse,
     TransactionCategoryBulkUpdate,
@@ -70,6 +71,7 @@ from app.services.statement_detection.service import (
     update_statement_for_file,
 )
 from app.services.statement_analysis import analyze_statement_file
+from app.services.statement_terminology.service import confirm_statement_term, list_statement_terms
 from app.services.transaction_categorization.service import (
     bulk_update_transaction_categories,
     categorize_transactions_for_statement,
@@ -144,6 +146,16 @@ def update_category_rule_endpoint(
 def delete_category_rule_endpoint(rule_id: int, db: Session = Depends(get_db)) -> Response:
     delete_category_rule(db, rule_id)
     return Response(status_code=204)
+
+
+@router.get("/statement-terms", response_model=list[StatementTermResponse])
+def list_statement_terms_endpoint(db: Session = Depends(get_db)) -> list[StatementTermResponse]:
+    return list_statement_terms(db)
+
+
+@router.post("/statement-terms/{term_id}/confirm", response_model=StatementTermResponse)
+def confirm_statement_term_endpoint(term_id: int, db: Session = Depends(get_db)) -> StatementTermResponse:
+    return confirm_statement_term(db, term_id)
 
 
 @router.get("/folders", response_model=list[FolderResponse])

@@ -9,6 +9,7 @@ from test_transaction_normalization_api import PHASE5_CHASE_TEXT, by_detail, mak
 EXPECTED_ANALYSIS_STEPS = [
     "statement_detection",
     "transaction_extraction",
+    "statement_terminology",
     "transaction_normalization",
     "transaction_type_classification",
     "transaction_categorization",
@@ -51,7 +52,7 @@ def test_unified_analyze_runs_ordered_pipeline_and_refreshes_attention(client: T
     assert attention.status_code == 200, attention.text
     attention_types = {item["attention_type"] for item in attention.json()["items"]}
     assert "TRANSACTION_TYPE_UNKNOWN" not in attention_types
-    assert "CATEGORY_UNCATEGORIZED" in attention_types
+    assert "CATEGORY_NEEDS_REVIEW" in attention_types
 
 
 def test_unified_reanalysis_preserves_manual_edits_and_selection(client: TestClient) -> None:
@@ -94,7 +95,7 @@ def test_unified_reanalysis_preserves_manual_edits_and_selection(client: TestCli
 
     assert amazon_after["id"] == amazon["id"]
     assert amazon_after["normalized_name"] == "Amazon Business"
-    assert amazon_after["original_normalized_name"] == "Amazon"
+    assert amazon_after["original_normalized_name"] == "Amazon Marketplace"
     assert amazon_after["user_edited_normalization"] is True
     assert zelle_after["id"] == zelle["id"]
     assert zelle_after["transaction_type"] == "EXPENSE"
@@ -130,6 +131,7 @@ def test_unified_analysis_stops_after_extraction_failure(client: TestClient) -> 
     statuses = {step["key"]: step["status"] for step in payload["steps"]}
     assert statuses["statement_detection"] == "COMPLETED"
     assert statuses["transaction_extraction"] == "FAILED"
+    assert statuses["statement_terminology"] == "SKIPPED"
     assert statuses["transaction_normalization"] == "SKIPPED"
     assert statuses["transaction_type_classification"] == "SKIPPED"
     assert statuses["transaction_categorization"] == "SKIPPED"
@@ -141,6 +143,7 @@ def test_unified_analysis_stops_after_extraction_failure(client: TestClient) -> 
 @pytest.mark.parametrize(
     ("service_name", "failed_step"),
     [
+        ("interpret_transactions_for_statement", "statement_terminology"),
         ("normalize_transactions_for_statement", "transaction_normalization"),
         ("classify_transaction_types_for_statement", "transaction_type_classification"),
         ("categorize_transactions_for_statement", "transaction_categorization"),

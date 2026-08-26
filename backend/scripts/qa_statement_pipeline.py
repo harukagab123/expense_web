@@ -32,7 +32,7 @@ from app.services.statement_detection.base import (
 )
 from app.services.statement_detection.pdf_text import PdfTextExtractionError, extract_pdf_pages
 from app.services.statement_detection.service import detect_statement_for_file
-from app.services.transaction_categorization.base import is_category_eligible
+from app.services.transaction_categorization.base import is_category_eligible, is_valid_category_pair
 from app.services.transaction_categorization.service import categorize_transactions_for_statement
 from app.services.transaction_extraction.base import DIRECTION_INFLOW, DIRECTION_OUTFLOW, PageText, ParserContext
 from app.services.transaction_extraction.chase import (
@@ -659,7 +659,12 @@ def classify_output_errors(result: StatementQaResult, transactions: list[Transac
             if transaction.main_category != "AUTO_EXPENSE" or transaction.subcategory != "AUTO_GAS":
                 result.category_errors += 1
         if transaction.transaction_type == TYPE_EXPENSE and any(pattern.search(raw) for pattern in AMBIGUOUS_RETAIL_PATTERNS):
-            if transaction.main_category != "PERSONAL_INTERNAL" or transaction.subcategory != "UNCATEGORIZED":
+            if (
+                transaction.main_category is None
+                or transaction.subcategory is None
+                or not is_valid_category_pair(transaction.main_category, transaction.subcategory)
+                or transaction.category_status != "NEEDS_REVIEW"
+            ):
                 result.category_errors += 1
 
 

@@ -29,6 +29,7 @@ RULE_PRIORITY = {
 def normalize_transaction_detail(
     transaction_detail: str,
     user_rules: list[UserNormalizationRule] | None = None,
+    interpreted_detail: str | None = None,
 ) -> NormalizationResult:
     normalized = normalized_for_match(transaction_detail)
     if not normalized:
@@ -38,14 +39,15 @@ def normalize_transaction_detail(
     if user_rule_result is not None:
         return user_rule_result
 
-    known_rule_result = match_known_rule(normalized)
+    semantic_detail = normalized_for_match(interpreted_detail or transaction_detail)
+    known_rule_result = match_known_rule(semantic_detail)
     if known_rule_result is not None:
         return known_rule_result
 
-    if looks_unresolved(normalized):
+    if looks_unresolved(semantic_detail):
         return NormalizationResult(None, 0.2, SOURCE_UNRESOLVED, STATUS_NEEDS_REVIEW)
 
-    cleaned = conservative_cleanup(normalized)
+    cleaned = conservative_cleanup(semantic_detail)
     if cleaned is None:
         return NormalizationResult(None, 0.25, SOURCE_UNRESOLVED, STATUS_NEEDS_REVIEW)
 
