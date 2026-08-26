@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.core.config import get_settings
 from app.db.session import get_session_factory
 from app.models.file import StoredFile
+from app.models.folder import Folder
 from app.models.statement import Statement
 from app.models.transaction import Transaction
 from app.services.source_retention import apply_retention_for_institution
@@ -22,6 +23,7 @@ def _create_source_statement(
     statement_end_date: date | None,
     created_at: datetime,
     document_type: str = "BANK_STATEMENT",
+    folder_id: int | None = None,
     with_transaction: bool = True,
 ) -> tuple[StoredFile, Statement]:
     storage_root = get_settings().storage_dir
@@ -31,6 +33,7 @@ def _create_source_statement(
     (storage_root / storage_path).write_bytes(b"%PDF-1.4\n%%EOF")
 
     stored_file = StoredFile(
+        folder_id=folder_id,
         original_filename=display_name,
         display_name=display_name,
         stored_filename=stored_filename,
@@ -212,6 +215,38 @@ def test_retention_counts_each_institution_independently(client: TestClient) -> 
         assert amex_result.removed_count == 1
         assert len(_available_statement_files(session, "CHASE")) == 5
         assert len(_available_statement_files(session, "AMEX")) == 5
+
+
+def test_retention_counts_each_statement_folder_independently(client: TestClient) -> None:
+    with get_session_factory()() as session:
+        folders = [Folder(name="Rica Chase"), Folder(name="Lawrence Chase")]
+        session.add_all(folders)
+        session.flush()
+
+        for folder in folders:
+            for month in range(1, 7):
+                _create_source_statement(
+                    session,
+                    institution="CHASE",
+                    display_name=f"{folder.name} 2026-{month:02d}.pdf",
+                    statement_end_date=date(2026, month, 28),
+                    created_at=datetime(2026, month, 28, tzinfo=UTC),
+                    folder_id=folder.id,
+                )
+
+        result = apply_retention_for_institution(session, "CHASE")
+
+        assert result.removed_count == 2
+        for folder in folders:
+            available_count = (
+                session.query(StoredFile)
+                .filter(
+                    StoredFile.folder_id == folder.id,
+                    StoredFile.source_file_available.is_(True),
+                )
+                .count()
+            )
+            assert available_count == 5
 
 
 def test_retention_protects_non_statement_files(client: TestClient) -> None:

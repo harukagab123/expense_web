@@ -20,6 +20,7 @@ from app.services.statement_detection.base import (
 logger = logging.getLogger(__name__)
 
 MAX_STORED_SOURCE_FILES_PER_INSTITUTION = 5
+_ALL_FOLDERS = object()
 FINANCIAL_STATEMENT_DOCUMENT_TYPES = {
     DOCUMENT_BANK_STATEMENT,
     DOCUMENT_CREDIT_CARD_STATEMENT,
@@ -49,30 +50,50 @@ class RetentionResult:
 def apply_retention_for_statement(session: Session, statement: Statement) -> RetentionResult:
     if not _is_retention_eligible(statement):
         return RetentionResult(institution=statement.institution)
-    return apply_retention_for_institution(session, statement.institution)
+    return apply_retention_for_institution(
+        session,
+        statement.institution,
+        folder_id=statement.file.folder_id,
+    )
 
 
-def apply_retention_for_institution(session: Session, institution: str) -> RetentionResult:
+def apply_retention_for_institution(
+    session: Session,
+    institution: str,
+    *,
+    folder_id: int | None | object = _ALL_FOLDERS,
+) -> RetentionResult:
     if institution == INSTITUTION_UNKNOWN:
         return RetentionResult(institution=institution)
 
-    statements = list(
-        session.execute(
-            select(Statement)
-            .join(Statement.file)
-            .options(selectinload(Statement.file))
-            .where(
-                Statement.institution == institution,
-                Statement.document_type.in_(FINANCIAL_STATEMENT_DOCUMENT_TYPES),
-                StoredFile.source_file_available.is_(True),
-            )
-        ).scalars().all()
+    statement_query = (
+        select(Statement)
+        .join(Statement.file)
+        .options(selectinload(Statement.file))
+        .where(
+            Statement.institution == institution,
+            Statement.document_type.in_(FINANCIAL_STATEMENT_DOCUMENT_TYPES),
+            StoredFile.source_file_available.is_(True),
+        )
     )
-    if len(statements) <= MAX_STORED_SOURCE_FILES_PER_INSTITUTION:
-        return RetentionResult(institution=institution)
+    if folder_id is not _ALL_FOLDERS:
+        if folder_id is None:
+            statement_query = statement_query.where(StoredFile.folder_id.is_(None))
+        else:
+            statement_query = statement_query.where(StoredFile.folder_id == folder_id)
 
-    ordered = sorted(statements, key=_statement_recency_key, reverse=True)
-    remove_candidates = ordered[MAX_STORED_SOURCE_FILES_PER_INSTITUTION:]
+    statements = list(
+        session.execute(statement_query).scalars().all()
+    )
+    statements_by_folder: dict[int | None, list[Statement]] = {}
+    for statement in statements:
+        statements_by_folder.setdefault(statement.file.folder_id, []).append(statement)
+
+    remove_candidates: list[Statement] = []
+    for folder_statements in statements_by_folder.values():
+        ordered = sorted(folder_statements, key=_statement_recency_key, reverse=True)
+        remove_candidates.extend(ordered[MAX_STORED_SOURCE_FILES_PER_INSTITUTION:])
+
     removed: list[RetentionRemovedFile] = []
 
     for statement in remove_candidates:
@@ -88,8 +109,9 @@ def apply_retention_for_institution(session: Session, institution: str) -> Reten
             )
         )
         logger.info(
-            "Retention removed old source statement file. institution=%s file_id=%s",
+            "Retention removed old source statement file. institution=%s folder_id=%s file_id=%s",
             institution,
+            stored_file.folder_id,
             stored_file.id,
         )
 
