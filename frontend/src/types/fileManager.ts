@@ -353,6 +353,23 @@ export type TransactionCategoryPayload = {
   main_category: CategoryMainValue;
   subcategory: CategorySubcategoryValue;
   use_for_future?: boolean;
+  replace_existing_rule?: boolean;
+};
+
+export type CategoryRule = {
+  id: number;
+  pattern: string;
+  main_category: CategoryMainValue | string;
+  subcategory: CategorySubcategoryValue | string;
+  match_type: string;
+  times_confirmed: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CategoryRulePayload = {
+  main_category: CategoryMainValue;
+  subcategory: CategorySubcategoryValue;
 };
 
 export type TransactionCategoryBulkPayload = {

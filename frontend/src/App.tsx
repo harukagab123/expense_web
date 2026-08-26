@@ -2,12 +2,14 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import "./App.css";
 import {
+  ApiRequestError,
   analyzeStatementFile,
   bulkUpdateTransactionReview,
   bulkUpdateTransactionCategories,
   bulkUpdateTransactionInclusion,
   createTransactionForStatement,
   createFolder,
+  deleteCategoryRule,
   deleteFolder,
   deleteStoredFile,
   excludeTransaction,
@@ -15,11 +17,13 @@ import {
   filePreviewUrl,
   getAttention,
   getAttentionCount,
+  getCategoryRules,
   getFileManagerTree,
   getStatementForFile,
   getTransactionsForStatement,
   searchFileManager,
   updateFolder,
+  updateCategoryRule,
   updateStatementForFile,
   updateStoredFile,
   updateTransaction,
@@ -43,6 +47,7 @@ import type {
   StatementTransaction,
   StoredFile,
   CategoryMainValue,
+  CategoryRule,
   CategorySubcategoryValue,
   TransactionDirection,
   TransactionExtraction,
@@ -115,6 +120,7 @@ type InlineTransactionEditValues = TransactionFormValues & {
   normalized_name: string;
   main_category: CategoryMainValue;
   subcategory: CategorySubcategoryValue;
+  use_for_future: boolean;
 };
 
 type TransactionDialogState = { mode: "add" } | null;
@@ -770,6 +776,7 @@ function inlineEditValuesFromTransaction(transaction: StatementTransaction): Inl
     subcategory: subcategory && validSubcategories.some((option) => option.value === subcategory)
       ? subcategory
       : defaultSubcategoryFor(mainCategory),
+    use_for_future: false,
   };
 }
 
@@ -800,8 +807,30 @@ function inlineTransactionEditIsDirty(
     values.direction !== initialValues.direction ||
     values.normalized_name !== initialValues.normalized_name ||
     values.main_category !== initialValues.main_category ||
-    values.subcategory !== initialValues.subcategory
+    values.subcategory !== initialValues.subcategory ||
+    values.use_for_future
   );
+}
+
+function categoryRuleConflict(error: unknown): { message: string; rule: CategoryRule } | null {
+  if (!(error instanceof ApiRequestError) || error.status !== 409) {
+    return null;
+  }
+  const data = error.data;
+  if (!data || typeof data !== "object" || !("detail" in data)) {
+    return null;
+  }
+  const detail = (data as { detail: unknown }).detail;
+  if (!detail || typeof detail !== "object" || !("code" in detail) || !("rule" in detail)) {
+    return null;
+  }
+  if ((detail as { code: unknown }).code !== "CATEGORY_RULE_CONFLICT") {
+    return null;
+  }
+  return {
+    message: String((detail as { message?: unknown }).message ?? error.message),
+    rule: (detail as { rule: CategoryRule }).rule,
+  };
 }
 
 function transactionPayloadChanges(
@@ -1043,6 +1072,10 @@ export default function App() {
   const [isAttentionLoading, setIsAttentionLoading] = useState(false);
   const [attentionError, setAttentionError] = useState("");
   const [isAttentionOpen, setIsAttentionOpen] = useState(false);
+  const [isRulesOpen, setIsRulesOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
+    () => window.localStorage.getItem("file-sidebar-collapsed") === "true",
+  );
   const [attentionFocusTarget, setAttentionFocusTarget] = useState<AttentionFocusTarget | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attentionRef = useRef<HTMLDivElement>(null);
@@ -1123,6 +1156,10 @@ export default function App() {
   useEffect(() => {
     void refreshAttention();
   }, [refreshAttention]);
+
+  useEffect(() => {
+    window.localStorage.setItem("file-sidebar-collapsed", String(isSidebarCollapsed));
+  }, [isSidebarCollapsed]);
 
   useEffect(() => {
     if (!isAttentionOpen) {
@@ -1516,6 +1553,9 @@ export default function App() {
                 onToggle={() => setIsAttentionOpen((current) => !current)}
               />
             </div>
+            <button onClick={() => setIsRulesOpen(true)} type="button">
+              Learned Rules
+            </button>
             <button onClick={handleCreateFolder} type="button">
               New Folder
             </button>
@@ -1525,91 +1565,6 @@ export default function App() {
           </div>
         </div>
       </header>
-
-      <section className="manager-toolbar" aria-label="File manager controls">
-        <div className="search-box">
-          <label htmlFor="file-search">Search</label>
-          <div className="search-input-wrap">
-            <input
-              aria-controls="file-search-results"
-              aria-expanded={isSearchOpen}
-              autoComplete="off"
-              id="file-search"
-              onChange={(event) => setSearch(event.target.value)}
-              onFocus={() => {
-                if (search.trim()) {
-                  setIsSearchOpen(true);
-                }
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  setIsSearchOpen(false);
-                }
-              }}
-              placeholder="Find folders or files"
-              role="combobox"
-              value={search}
-            />
-            {search ? (
-              <button aria-label="Clear search" className="search-clear" onClick={clearSearch} type="button">
-                x
-              </button>
-            ) : null}
-          </div>
-          {isSearchOpen && search.trim() ? (
-            <div className="search-results" id="file-search-results" role="listbox">
-              {isSearchLoading ? <div className="search-state">Searching...</div> : null}
-              {!isSearchLoading && searchError ? <div className="search-state search-state--error">{searchError}</div> : null}
-              {!isSearchLoading && !searchError && searchResults.length === 0 ? (
-                <div className="search-state">No files or folders found.</div>
-              ) : null}
-              {!isSearchLoading && !searchError
-                ? searchResults.map((result) => (
-                    <button
-                      className="search-result-row"
-                      key={searchResultKey(result)}
-                      onClick={() => selectSearchResult(result)}
-                      role="option"
-                      type="button"
-                    >
-                      <span className="search-result-row__type">{result.type === "folder" ? "Folder" : "File"}</span>
-                      <span className="search-result-row__body">
-                        <span className="search-result-row__name">{result.name}</span>
-                        <span className="search-result-row__path">{formatLocation(result.parent_path)}</span>
-                      </span>
-                      {result.type === "file" && result.file_size !== null ? (
-                        <span className="search-result-row__meta">{formatBytes(result.file_size)}</span>
-                      ) : null}
-                    </button>
-                  ))
-                : null}
-            </div>
-          ) : null}
-        </div>
-        <label>
-          <span>Sort</span>
-          <select onChange={(event) => setSortBy(event.target.value as SortBy)} value={sortBy}>
-            {sortOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Direction</span>
-          <select
-            onChange={(event) => setSortDirection(event.target.value as SortDirection)}
-            value={sortDirection}
-          >
-            <option value="asc">Ascending</option>
-            <option value="desc">Descending</option>
-          </select>
-        </label>
-        <button onClick={() => void loadTree()} type="button">
-          Refresh
-        </button>
-      </section>
 
       <nav className="breadcrumbs" aria-label="Breadcrumbs">
         <button onClick={selectRoot} type="button">
@@ -1633,14 +1588,103 @@ export default function App() {
         ) : null}
       </nav>
 
-      <section className="manager-layout" aria-label="File manager">
-        <aside className="tree-pane" aria-label="Folders and files">
+      <section
+        className={`manager-layout ${isSidebarCollapsed ? "manager-layout--sidebar-collapsed" : ""}`}
+        aria-label="File manager"
+      >
+        <aside
+          className={`tree-pane ${isSidebarCollapsed ? "tree-pane--collapsed" : ""}`}
+          aria-label="Folders and files"
+        >
           <div className="pane-header">
-            <h2>My Files</h2>
-            <span>{isLoading ? "Loading" : `${tree.folders.length + tree.files.length} root items`}</span>
+            {!isSidebarCollapsed ? (
+              <div>
+                <h2>My Files</h2>
+                <span>{isLoading ? "Loading" : `${tree.folders.length + tree.files.length} root items`}</span>
+              </div>
+            ) : null}
+            <button
+              aria-label={isSidebarCollapsed ? "Expand file sidebar" : "Collapse file sidebar"}
+              className="sidebar-collapse-button"
+              onClick={() => setIsSidebarCollapsed((current) => !current)}
+              title={isSidebarCollapsed ? "Expand files" : "Collapse files"}
+              type="button"
+            >
+              {isSidebarCollapsed ? "›" : "‹"}
+            </button>
           </div>
-          {error ? <p className="error-banner">{error}</p> : null}
-          <ul className="tree-list tree-list--root">
+          {!isSidebarCollapsed ? (
+            <>
+              <section className="sidebar-toolbar" aria-label="File sidebar controls">
+                <div className="search-box">
+                  <label htmlFor="file-search">Search files</label>
+                  <div className="search-input-wrap">
+                    <input
+                      aria-controls="file-search-results"
+                      aria-expanded={isSearchOpen}
+                      autoComplete="off"
+                      id="file-search"
+                      onChange={(event) => setSearch(event.target.value)}
+                      onFocus={() => search.trim() && setIsSearchOpen(true)}
+                      onKeyDown={(event) => event.key === "Escape" && setIsSearchOpen(false)}
+                      placeholder="Find folders or files"
+                      role="combobox"
+                      value={search}
+                    />
+                    {search ? (
+                      <button aria-label="Clear search" className="search-clear" onClick={clearSearch} type="button">
+                        x
+                      </button>
+                    ) : null}
+                  </div>
+                  {isSearchOpen && search.trim() ? (
+                    <div className="search-results" id="file-search-results" role="listbox">
+                      {isSearchLoading ? <div className="search-state">Searching...</div> : null}
+                      {!isSearchLoading && searchError ? <div className="search-state search-state--error">{searchError}</div> : null}
+                      {!isSearchLoading && !searchError && searchResults.length === 0 ? (
+                        <div className="search-state">No files or folders found.</div>
+                      ) : null}
+                      {!isSearchLoading && !searchError
+                        ? searchResults.map((result) => (
+                            <button
+                              className="search-result-row"
+                              key={searchResultKey(result)}
+                              onClick={() => selectSearchResult(result)}
+                              role="option"
+                              type="button"
+                            >
+                              <span className="search-result-row__type">{result.type === "folder" ? "Folder" : "File"}</span>
+                              <span className="search-result-row__body">
+                                <span className="search-result-row__name">{result.name}</span>
+                                <span className="search-result-row__path">{formatLocation(result.parent_path)}</span>
+                              </span>
+                            </button>
+                          ))
+                        : null}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="sidebar-sort-controls">
+                  <label>
+                    <span>Sort</span>
+                    <select onChange={(event) => setSortBy(event.target.value as SortBy)} value={sortBy}>
+                      {sortOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Direction</span>
+                    <select onChange={(event) => setSortDirection(event.target.value as SortDirection)} value={sortDirection}>
+                      <option value="asc">Ascending</option>
+                      <option value="desc">Descending</option>
+                    </select>
+                  </label>
+                  <button onClick={() => void loadTree()} type="button">Refresh</button>
+                </div>
+              </section>
+              {error ? <p className="error-banner">{error}</p> : null}
+              <ul className="tree-list tree-list--root">
             <li>
               <div
                 className={`tree-row tree-row--folder ${selected.type === "root" ? "tree-row--selected" : ""}`}
@@ -1659,7 +1703,9 @@ export default function App() {
                 {tree.files.map((file) => renderFileRow(file, 1))}
               </ul>
             </li>
-          </ul>
+              </ul>
+            </>
+          ) : null}
         </aside>
 
         <section className="details-pane" aria-label="Selected item details">
@@ -1705,25 +1751,27 @@ export default function App() {
             type="file"
           />
 
-          <div
-            className={`drop-zone ${isDragging ? "drop-zone--active" : ""}`}
-            onDragLeave={() => setIsDragging(false)}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setIsDragging(true);
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              setIsDragging(false);
-              void handleUpload(event.dataTransfer.files);
-            }}
-          >
-            <strong>Drop files here</strong>
-            <span>Upload target: {uploadTargetPath}</span>
-            <button onClick={() => fileInputRef.current?.click()} type="button">
-              Browse Files
-            </button>
-          </div>
+          {!selectedFile ? (
+            <div
+              className={`drop-zone ${isDragging ? "drop-zone--active" : ""}`}
+              onDragLeave={() => setIsDragging(false)}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setIsDragging(true);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setIsDragging(false);
+                void handleUpload(event.dataTransfer.files);
+              }}
+            >
+              <strong>Drop files here</strong>
+              <span>Upload target: {uploadTargetPath}</span>
+              <button onClick={() => fileInputRef.current?.click()} type="button">
+                Browse Files
+              </button>
+            </div>
+          ) : null}
 
           <p className={`notice ${error ? "notice--error" : ""}`}>{error || notice}</p>
 
@@ -1747,6 +1795,8 @@ export default function App() {
           )}
         </section>
       </section>
+
+      {isRulesOpen ? <LearnedRulesDialog onClose={() => setIsRulesOpen(false)} /> : null}
 
       {nameDialog ? (
         <div className="modal-backdrop" role="presentation">
@@ -2014,6 +2064,7 @@ function FileDetails({
   const [transactionError, setTransactionError] = useState("");
   const [analysisSteps, setAnalysisSteps] = useState<AnalysisStep[]>([]);
   const [analysisNotice, setAnalysisNotice] = useState("");
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2225,44 +2276,21 @@ function FileDetails({
     }
   }
 
+  const isStatementWorkspace = isPdf && statement?.detection_status !== "NOT_A_STATEMENT";
+  const metadata = (
+    <dl className="metadata-grid">
+      <div><dt>Filename</dt><dd>{file.display_name}</dd></div>
+      <div><dt>File Type</dt><dd>{file.mime_type}</dd></div>
+      <div><dt>File Size</dt><dd>{formatBytes(file.file_size)}</dd></div>
+      <div><dt>Location</dt><dd>{locationPath}</dd></div>
+      <div><dt>Uploaded</dt><dd>{formatDate(file.created_at)}</dd></div>
+      <div><dt>Modified</dt><dd>{formatDate(file.updated_at)}</dd></div>
+    </dl>
+  );
+
   return (
-    <div className="details-content">
-      <dl className="metadata-grid">
-        <div>
-          <dt>Filename</dt>
-          <dd>{file.display_name}</dd>
-        </div>
-        <div>
-          <dt>File Type</dt>
-          <dd>{file.mime_type}</dd>
-        </div>
-        <div>
-          <dt>File Size</dt>
-          <dd>{formatBytes(file.file_size)}</dd>
-        </div>
-        <div>
-          <dt>Location</dt>
-          <dd>{locationPath}</dd>
-        </div>
-        <div>
-          <dt>Uploaded</dt>
-          <dd>{formatDate(file.created_at)}</dd>
-        </div>
-        <div>
-          <dt>Modified</dt>
-          <dd>{formatDate(file.updated_at)}</dd>
-        </div>
-      </dl>
-
-      <div className="preview-header">
-        <h3>Preview</h3>
-        <a className="download-link" href={fileDownloadUrl(file.id)}>
-          Download
-        </a>
-      </div>
-
-      <PreviewPane file={file} />
-      {isPdf || statement ? (
+    <div className={`details-content ${isStatementWorkspace ? "details-content--statement" : ""}`}>
+      {isStatementWorkspace ? (
         <StatementPanel
           analysisNotice={analysisNotice}
           analysisSteps={analysisSteps}
@@ -2275,13 +2303,24 @@ function FileDetails({
           error={statementError}
           isAnalyzing={isAnalyzing}
           isLoading={isStatementLoading}
+          fileName={file.display_name}
           onAnalyze={handleAnalyzeStatement}
+          onViewOriginal={() => setIsPreviewOpen(true)}
           onSave={handleSaveStatement}
           onAttentionTargetConsumed={onAttentionTargetConsumed}
           statement={statement}
         />
-      ) : null}
-      {statement ? (
+      ) : (
+        <>
+          {metadata}
+          <div className="preview-header">
+            <h3>Preview</h3>
+            <a className="download-link" href={fileDownloadUrl(file.id)}>Download</a>
+          </div>
+          <PreviewPane file={file} />
+        </>
+      )}
+      {isStatementWorkspace && statement ? (
         <TransactionPanel
           error={transactionError}
           isAnalyzing={isAnalyzing}
@@ -2314,6 +2353,29 @@ function FileDetails({
           transactions={transactions}
         />
       ) : null}
+      {isStatementWorkspace ? (
+        <details className="file-metadata-disclosure">
+          <summary>File details</summary>
+          {metadata}
+        </details>
+      ) : null}
+      {isPreviewOpen ? (
+        <div className="modal-backdrop preview-backdrop" role="presentation">
+          <section aria-label="Original file preview" aria-modal="true" className="preview-dialog" role="dialog">
+            <div className="preview-dialog__header">
+              <div>
+                <h2>Original File</h2>
+                <p>{file.display_name}</p>
+              </div>
+              <div className="detail-actions">
+                <a className="download-link" href={fileDownloadUrl(file.id)}>Download</a>
+                <button autoFocus onClick={() => setIsPreviewOpen(false)} type="button">Close</button>
+              </div>
+            </div>
+            <PreviewPane file={file} />
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2323,22 +2385,26 @@ function StatementPanel({
   analysisSteps,
   attentionTarget,
   error,
+  fileName,
   isAnalyzing,
   isLoading,
   onAnalyze,
   onAttentionTargetConsumed,
   onSave,
+  onViewOriginal,
   statement,
 }: {
   analysisNotice: string;
   analysisSteps: AnalysisStep[];
   attentionTarget: AttentionFocusTarget | null;
   error: string;
+  fileName: string;
   isAnalyzing: boolean;
   isLoading: boolean;
   onAnalyze: () => void;
   onAttentionTargetConsumed: () => void;
   onSave: (payload: StatementUpdate) => Promise<void>;
+  onViewOriginal: () => void;
   statement: StatementDetection | null;
 }) {
   const [editValues, setEditValues] = useState<StatementEditValues | null>(null);
@@ -2346,6 +2412,7 @@ function StatementPanel({
   const [isSaving, setIsSaving] = useState(false);
   const [editError, setEditError] = useState("");
   const [activeAttentionField, setActiveAttentionField] = useState<string | null>(null);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const handledAttentionRef = useRef("");
   const buttonText = statement ? "Analyze Again" : "Analyze";
   const statusText = statement ? labelFor(detectionStatusLabels, statement.detection_status) : "Not Analyzed";
@@ -2378,6 +2445,7 @@ function StatementPanel({
     setEditValues(statementToEditValues(statement));
     setEditError("");
     setIsEditing(true);
+    setIsDetailsOpen(true);
     setActiveAttentionField(attentionTarget.targetField);
     onAttentionTargetConsumed();
   }, [attentionTarget, onAttentionTargetConsumed, statement]);
@@ -2477,23 +2545,35 @@ function StatementPanel({
   const formatAccountType = (value: string | null) => (value ? labelFor(accountTypeLabels, value) : "Unknown");
   const formatLastFour = (value: string | null) => (value ? `ending in ${value}` : "Unknown");
   const formatProduct = (value: string | null) => value || "Not set";
+  const statementSummary = statement
+    ? [
+        formatInstitution(statement.institution),
+        formatAccountType(statement.account_type),
+        formatDateRange(statement.statement_start_date, statement.statement_end_date),
+      ].join(" • ")
+    : "This statement has not been analyzed.";
 
   return (
     <section className="statement-panel" aria-label="Statement information">
       <div className="statement-panel__header">
         <div>
-          <h3>{isEditing ? "Edit Statement Details" : "Statement Information"}</h3>
-          <p>{subtitle}</p>
+          <h3>{isEditing ? "Edit Statement Details" : fileName}</h3>
+          <p>{statementSummary}</p>
+          <span className="statement-status">{subtitle}</span>
         </div>
         <div className="statement-actions">
           {statement && !isEditing ? (
-            <button disabled={isBusy} onClick={startEditing} type="button">
-              Edit Details
-            </button>
+            <>
+              <button disabled={isBusy} onClick={() => setIsDetailsOpen((current) => !current)} type="button">
+                {isDetailsOpen ? "Hide Details" : "Details"}
+              </button>
+              <button disabled={isBusy} onClick={startEditing} type="button">Edit Details</button>
+            </>
           ) : null}
           <button disabled={isBusy} onClick={onAnalyze} type="button">
             {isAnalyzing ? "Analyzing..." : buttonText}
           </button>
+          <button disabled={isBusy} onClick={onViewOriginal} type="button">View Original File</button>
         </div>
       </div>
 
@@ -2613,7 +2693,7 @@ function StatementPanel({
         </form>
       ) : null}
 
-      {statement && !isEditing ? (
+      {statement && !isEditing && isDetailsOpen ? (
         <dl className="statement-grid">
           <div>
             <dt>Document Type</dt>
@@ -3044,11 +3124,12 @@ function TransactionPanel({
     const categoryChanged =
       inlineEditValues.main_category !== initialValues.main_category ||
       inlineEditValues.subcategory !== initialValues.subcategory;
+    const categorySaveRequested = categoryChanged || inlineEditValues.use_for_future;
 
     if (
       !hasPayloadChanges(corePayload) &&
       !normalizedNameChanged &&
-      !categoryChanged
+      !categorySaveRequested
     ) {
       cancelInlineEdit();
       return;
@@ -3066,12 +3147,27 @@ function TransactionPanel({
           use_for_future: false,
         });
       }
-      if (categoryChanged) {
-        await onEditCategory(transaction.id, {
+      if (categorySaveRequested) {
+        const categoryPayload: TransactionCategoryPayload = {
           main_category: inlineEditValues.main_category,
           subcategory: inlineEditValues.subcategory,
-          use_for_future: false,
-        });
+          use_for_future: inlineEditValues.use_for_future,
+        };
+        try {
+          await onEditCategory(transaction.id, categoryPayload);
+        } catch (caught) {
+          const conflict = categoryRuleConflict(caught);
+          if (!conflict) {
+            throw caught;
+          }
+          const replace = window.confirm(
+            `${conflict.message}\n\nExisting: ${labelFor(categoryLabels, conflict.rule.main_category)} → ${labelFor(subcategoryLabels, conflict.rule.subcategory)}\nNew: ${labelFor(categoryLabels, inlineEditValues.main_category)} → ${labelFor(subcategoryLabels, inlineEditValues.subcategory)}\n\nReplace the saved rule?`,
+          );
+          if (!replace) {
+            throw new Error("The saved rule was not replaced. Uncheck the future-transactions option to save this row only.");
+          }
+          await onEditCategory(transaction.id, { ...categoryPayload, replace_existing_rule: true });
+        }
       }
       cancelInlineEdit();
     } catch (caught) {
@@ -3775,7 +3871,9 @@ function TransactionPanel({
                       {transaction.user_edited_category ? (
                         <span className="transaction-badge">Category edited</span>
                       ) : null}
-                      {currentCategorySource === "LEARNED_RULE" ? <span className="transaction-badge">Rule</span> : null}
+                      {currentCategorySource === "LEARNED_RULE" ? (
+                        <span className="transaction-badge">Learned from your previous correction</span>
+                      ) : null}
                       {needsCategoryReview ? <span className="transaction-badge">Category review</span> : null}
                     </td>
                     <td className={attentionCellClass("subcategory")}>
@@ -3854,6 +3952,14 @@ function TransactionPanel({
                       <div className="transaction-row-actions">
                         {isEditing ? (
                           <>
+                            <label className="checkbox-label transaction-rule-checkbox">
+                              <input
+                                checked={editValues?.use_for_future ?? false}
+                                onChange={(event) => updateInlineEditValue("use_for_future", event.target.checked)}
+                                type="checkbox"
+                              />
+                              <span>Use this category for similar future transactions</span>
+                            </label>
                             <button disabled={isSavingInlineEdit} onClick={() => void handleSaveInlineEdit(transaction)} type="button">
                               {isSavingInlineEdit ? "Saving..." : "Save"}
                             </button>
@@ -3953,15 +4059,181 @@ function TransactionPanel({
   );
 }
 
+function LearnedRulesDialog({ onClose }: { onClose: () => void }) {
+  const [rules, setRules] = useState<CategoryRule[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
+  const [editValues, setEditValues] = useState<CategoryFormValues>({
+    main_category: "PERSONAL_INTERNAL",
+    subcategory: "UNCATEGORIZED",
+    use_for_future: false,
+  });
+
+  const loadRules = useCallback(async () => {
+    setIsLoading(true);
+    setError("");
+    try {
+      setRules(await getCategoryRules());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Learned rules could not be loaded.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRules();
+  }, [loadRules]);
+
+  function startRuleEdit(rule: CategoryRule) {
+    const mainCategory = isCategoryMainValue(rule.main_category) ? rule.main_category : "PERSONAL_INTERNAL";
+    const subcategory = isCategorySubcategoryValue(rule.subcategory)
+      ? rule.subcategory
+      : defaultSubcategoryFor(mainCategory);
+    setEditingRuleId(rule.id);
+    setEditValues({ main_category: mainCategory, subcategory, use_for_future: false });
+    setError("");
+  }
+
+  async function saveRule(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (editingRuleId === null) {
+      return;
+    }
+    const validationMessage = validateCategoryForm(editValues);
+    if (validationMessage) {
+      setError(validationMessage);
+      return;
+    }
+    try {
+      await updateCategoryRule(editingRuleId, {
+        main_category: editValues.main_category,
+        subcategory: editValues.subcategory,
+      });
+      setEditingRuleId(null);
+      await loadRules();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Learned rule could not be saved.");
+    }
+  }
+
+  async function removeRule(rule: CategoryRule) {
+    if (!window.confirm(`Delete the learned rule for ${rule.pattern}? Historical categories will stay unchanged.`)) {
+      return;
+    }
+    try {
+      await deleteCategoryRule(rule.id);
+      if (editingRuleId === rule.id) {
+        setEditingRuleId(null);
+      }
+      await loadRules();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Learned rule could not be deleted.");
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section aria-label="Learned category rules" aria-modal="true" className="learned-rules-dialog" role="dialog">
+        <div className="learned-rules-dialog__header">
+          <div>
+            <h2>Learned Category Rules</h2>
+            <p>These rules categorize future matching transactions. Historical edits are never rewritten.</p>
+          </div>
+          <button autoFocus onClick={onClose} type="button">Close</button>
+        </div>
+        {isLoading ? <div className="transaction-state">Loading learned rules...</div> : null}
+        {error ? <div className="transaction-state transaction-state--error">{error}</div> : null}
+        {!isLoading && rules.length === 0 ? (
+          <div className="transaction-empty">No learned category rules yet.</div>
+        ) : null}
+        {rules.length > 0 ? (
+          <div className="learned-rules-table-wrap">
+            <table className="learned-rules-table">
+              <thead>
+                <tr><th>Merchant / Pattern</th><th>Category</th><th>Subcategory</th><th>Match</th><th>Confirmed</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {rules.map((rule) => (
+                  <tr key={rule.id}>
+                    <td>{rule.pattern}</td>
+                    <td>{labelFor(categoryLabels, rule.main_category)}</td>
+                    <td>{labelFor(subcategoryLabels, rule.subcategory)}</td>
+                    <td>{rule.match_type === "NORMALIZED_NAME" ? "Exact merchant name" : labelFor({}, rule.match_type)}</td>
+                    <td>{rule.times_confirmed}</td>
+                    <td>
+                      <div className="transaction-row-actions">
+                        <button onClick={() => startRuleEdit(rule)} type="button">Edit</button>
+                        <button className="danger-button" onClick={() => void removeRule(rule)} type="button">Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        {editingRuleId !== null ? (
+          <form className="learned-rule-edit" onSubmit={(event) => void saveRule(event)}>
+            <label>
+              <span>Category</span>
+              <select
+                value={editValues.main_category}
+                onChange={(event) => {
+                  const mainCategory = event.target.value as CategoryMainValue;
+                  setEditValues({
+                    main_category: mainCategory,
+                    subcategory: defaultSubcategoryFor(mainCategory),
+                    use_for_future: false,
+                  });
+                }}
+              >
+                {categoryOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Subcategory</span>
+              <select
+                value={editValues.subcategory}
+                onChange={(event) => setEditValues((current) => ({
+                  ...current,
+                  subcategory: event.target.value as CategorySubcategoryValue,
+                }))}
+              >
+                {subcategoryOptionsFor(editValues.main_category).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <div className="modal-actions">
+              <button onClick={() => setEditingRuleId(null)} type="button">Cancel</button>
+              <button type="submit">Save Rule</button>
+            </div>
+          </form>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
 function PreviewPane({ file }: { file: StoredFile }) {
   const previewType = fileCanPreview(file);
   const [previewState, setPreviewState] = useState<PreviewState>(
-    previewType === "unsupported" ? { status: "unsupported" } : { status: "loading" },
+    previewType === "unsupported"
+      ? { status: "unsupported" }
+      : previewType === "pdf"
+        ? { status: "ready", objectUrl: filePreviewUrl(file.id) }
+        : { status: "loading" },
   );
 
   useEffect(() => {
     if (previewType === "unsupported") {
       setPreviewState({ status: "unsupported" });
+      return;
+    }
+    if (previewType === "pdf") {
+      setPreviewState({ status: "ready", objectUrl: filePreviewUrl(file.id) });
       return;
     }
 

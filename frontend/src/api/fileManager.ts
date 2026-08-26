@@ -3,6 +3,8 @@ import type {
   AttentionCountResponse,
   AttentionListResponse,
   CategoryCatalogResponse,
+  CategoryRule,
+  CategoryRulePayload,
   FileManagerTree,
   SearchResponse,
   SortBy,
@@ -58,10 +60,22 @@ async function requestJson<T>(path: string, options: RequestOptions = {}): Promi
   const data = text ? JSON.parse(text) : null;
 
   if (!response.ok) {
-    throw new Error(formatApiError(data));
+    throw new ApiRequestError(response.status, formatApiError(data), data);
   }
 
   return data as T;
+}
+
+export class ApiRequestError extends Error {
+  status: number;
+  data: unknown;
+
+  constructor(status: number, message: string, data: unknown) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.data = data;
+  }
 }
 
 function formatApiError(data: unknown): string {
@@ -83,6 +97,9 @@ function formatApiError(data: unknown): string {
       })
       .filter(Boolean);
     return messages.join(" ") || "Request failed.";
+  }
+  if (detail && typeof detail === "object" && "message" in detail) {
+    return String((detail as { message: unknown }).message);
   }
   return "Request failed.";
 }
@@ -107,6 +124,21 @@ export async function searchFileManager(queryText: string, signal?: AbortSignal)
 
 export async function getCategoryCatalog(): Promise<CategoryCatalogResponse> {
   return requestJson<CategoryCatalogResponse>("/api/categories/catalog");
+}
+
+export async function getCategoryRules(): Promise<CategoryRule[]> {
+  return requestJson<CategoryRule[]>("/api/category-rules");
+}
+
+export async function updateCategoryRule(ruleId: number, payload: CategoryRulePayload): Promise<CategoryRule> {
+  return requestJson<CategoryRule>(`/api/category-rules/${ruleId}`, {
+    method: "PATCH",
+    json: payload,
+  });
+}
+
+export async function deleteCategoryRule(ruleId: number): Promise<void> {
+  await requestJson(`/api/category-rules/${ruleId}`, { method: "DELETE" });
 }
 
 export async function getAttention(limit = 100): Promise<AttentionListResponse> {

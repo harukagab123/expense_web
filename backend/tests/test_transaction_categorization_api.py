@@ -222,3 +222,167 @@ def test_category_validation_excluded_rows_and_manual_rows(client: TestClient) -
     excluded_row = by_detail(lookup.json()["transactions"], "CHEVRON 0094821 FREMONT CA")
     assert excluded_row["excluded"] is True
     assert excluded_row["category_status"] == "CATEGORIZED"
+
+
+def set_normalized_name(client: TestClient, transaction: dict, normalized_name: str) -> dict:
+    response = client.patch(
+        f"/api/transactions/{transaction['id']}/normalization",
+        json={"normalized_name": normalized_name},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_normalized_learned_rule_conflict_management_and_selection_preservation(client: TestClient) -> None:
+    statement, _transactions = prepare_categorized_statement(client)
+    first = set_normalized_name(
+        client,
+        add_typed_transaction(client, statement["id"], "COMCAST CABLE COMM", "EXPENSE"),
+        "Comcast",
+    )
+    future = set_normalized_name(
+        client,
+        add_typed_transaction(client, statement["id"], "COMCAST CABLE COMM PAYMENT", "EXPENSE"),
+        "Comcast",
+    )
+    excluded = client.patch(
+        f"/api/transactions/{future['id']}/inclusion",
+        json={"include_in_expenses": False},
+    )
+    assert excluded.status_code == 200, excluded.text
+
+    learned = client.patch(
+        f"/api/transactions/{first['id']}/category",
+        json={
+            "main_category": "BUSINESS_USE_OF_HOME",
+            "subcategory": "HOME_TELECOM_INTERNET",
+            "use_for_future": True,
+        },
+    )
+    assert learned.status_code == 200, learned.text
+    assert learned.json()["category_rule_id"] is not None
+
+    categorized = client.post(f"/api/statements/{statement['id']}/categorize-transactions")
+    future_after = by_detail(categorized.json()["transactions"], "COMCAST CABLE COMM PAYMENT")
+    assert (future_after["main_category"], future_after["subcategory"]) == (
+        "BUSINESS_USE_OF_HOME",
+        "HOME_TELECOM_INTERNET",
+    )
+    assert future_after["category_source"] == "LEARNED_RULE"
+    assert future_after["include_in_expenses"] is False
+    attention = client.get("/api/attention")
+    assert attention.status_code == 200, attention.text
+    assert not any(
+        item["transaction_id"] == future["id"] and item["attention_type"] == "CATEGORY_MISSING"
+        for item in attention.json()["items"]
+    )
+
+    confirmed_again = client.patch(
+        f"/api/transactions/{future['id']}/category",
+        json={
+            "main_category": "BUSINESS_USE_OF_HOME",
+            "subcategory": "HOME_TELECOM_INTERNET",
+            "use_for_future": True,
+        },
+    )
+    assert confirmed_again.status_code == 200, confirmed_again.text
+    repeated_rules = client.get("/api/category-rules").json()
+    assert len(repeated_rules) == 1
+    assert repeated_rules[0]["times_confirmed"] == 2
+
+    conflict = client.patch(
+        f"/api/transactions/{first['id']}/category",
+        json={
+            "main_category": "PROFIT_LOSS_BUSINESS",
+            "subcategory": "BUSINESS_OFFICE_EXPENSE",
+            "use_for_future": True,
+        },
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["detail"]["code"] == "CATEGORY_RULE_CONFLICT"
+
+    rules_before_replace = client.get("/api/category-rules")
+    assert rules_before_replace.status_code == 200, rules_before_replace.text
+    comcast_rule = next(rule for rule in rules_before_replace.json() if rule["pattern"] == "COMCAST")
+    assert comcast_rule["subcategory"] == "HOME_TELECOM_INTERNET"
+
+    replaced = client.patch(
+        f"/api/transactions/{first['id']}/category",
+        json={
+            "main_category": "PROFIT_LOSS_BUSINESS",
+            "subcategory": "BUSINESS_OFFICE_EXPENSE",
+            "use_for_future": True,
+            "replace_existing_rule": True,
+        },
+    )
+    assert replaced.status_code == 200, replaced.text
+
+    edited_rule = client.patch(
+        f"/api/category-rules/{comcast_rule['id']}",
+        json={"main_category": "BUSINESS_USE_OF_HOME", "subcategory": "HOME_UTILITIES"},
+    )
+    assert edited_rule.status_code == 200, edited_rule.text
+    assert edited_rule.json()["subcategory"] == "HOME_UTILITIES"
+
+    deleted = client.delete(f"/api/category-rules/{comcast_rule['id']}")
+    assert deleted.status_code == 204, deleted.text
+    assert client.get("/api/category-rules").json() == []
+
+    historical = client.get(f"/api/statements/{statement['id']}/transactions").json()["transactions"]
+    historical_future = by_detail(historical, "COMCAST CABLE COMM PAYMENT")
+    assert historical_future["subcategory"] == "HOME_TELECOM_INTERNET"
+    assert historical_future["include_in_expenses"] is False
+
+
+def test_ambiguous_merchants_only_learn_when_explicit_and_specific(client: TestClient) -> None:
+    statement, _transactions = prepare_categorized_statement(client)
+    generic_amazon = set_normalized_name(
+        client,
+        add_typed_transaction(client, statement["id"], "AMAZON MARKETPLACE ORDER", "EXPENSE"),
+        "Amazon",
+    )
+    amazon_business = set_normalized_name(
+        client,
+        add_typed_transaction(client, statement["id"], "AMAZON BUSINESS ORDER 101", "EXPENSE"),
+        "Amazon Business",
+    )
+    future_business = set_normalized_name(
+        client,
+        add_typed_transaction(client, statement["id"], "AMAZON BUSINESS ORDER 202", "EXPENSE"),
+        "Amazon Business",
+    )
+
+    one_off = client.patch(
+        f"/api/transactions/{generic_amazon['id']}/category",
+        json={"main_category": "PROFIT_LOSS_BUSINESS", "subcategory": "BUSINESS_OFFICE_EXPENSE"},
+    )
+    assert one_off.status_code == 200, one_off.text
+    assert client.get("/api/category-rules").json() == []
+
+    explicit = client.patch(
+        f"/api/transactions/{amazon_business['id']}/category",
+        json={
+            "main_category": "PROFIT_LOSS_BUSINESS",
+            "subcategory": "BUSINESS_OFFICE_EXPENSE",
+            "use_for_future": True,
+        },
+    )
+    assert explicit.status_code == 200, explicit.text
+
+    categorized = client.post(f"/api/statements/{statement['id']}/categorize-transactions")
+    rows = categorized.json()["transactions"]
+    business_after = by_detail(rows, "AMAZON BUSINESS ORDER 202")
+    generic_after = by_detail(rows, "AMAZON MARKETPLACE ORDER")
+    assert business_after["category_source"] == "LEARNED_RULE"
+    assert business_after["subcategory"] == "BUSINESS_OFFICE_EXPENSE"
+    assert generic_after["category_source"] == "USER_EDITED"
+
+    another_generic = set_normalized_name(
+        client,
+        add_typed_transaction(client, statement["id"], "AMAZON MARKETPLACE ORDER 303", "EXPENSE"),
+        "Amazon",
+    )
+    categorized_again = client.post(f"/api/statements/{statement['id']}/categorize-transactions")
+    another_generic_after = by_detail(categorized_again.json()["transactions"], "AMAZON MARKETPLACE ORDER 303")
+    assert another_generic_after["category_source"] != "LEARNED_RULE"
+    assert another_generic_after["id"] == another_generic["id"]

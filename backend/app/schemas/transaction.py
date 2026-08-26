@@ -361,6 +361,22 @@ class TransactionCategoryUpdate(BaseModel):
     subcategory: CategorySubcategoryValue
     use_for_future: bool = False
     match_type: CategoryMatchType | None = None
+    replace_existing_rule: bool = False
+
+    @root_validator
+    def validate_category_pair(cls, values):
+        main_category = values.get("main_category")
+        subcategory = values.get("subcategory")
+        if main_category not in CATEGORY_IDS or subcategory not in SUBCATEGORY_TO_MAIN:
+            raise ValueError("Category is not supported.")
+        if not is_valid_category_pair(main_category, subcategory):
+            raise ValueError("Subcategory is not valid for the selected category.")
+        return values
+
+
+class CategoryRuleUpdate(BaseModel):
+    main_category: CategoryMainValue
+    subcategory: CategorySubcategoryValue
 
     @root_validator
     def validate_category_pair(cls, values):

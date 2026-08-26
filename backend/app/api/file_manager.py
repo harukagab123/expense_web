@@ -26,6 +26,8 @@ from app.schemas.analysis import StatementAnalysisResponse
 from app.schemas.statement import StatementLookupResponse, StatementResponse, StatementUpdate
 from app.schemas.transaction import (
     CategoryCatalogResponse,
+    CategoryRuleResponse,
+    CategoryRuleUpdate,
     TransactionCreate,
     TransactionCategorizationRunResponse,
     TransactionCategoryBulkUpdate,
@@ -71,6 +73,9 @@ from app.services.statement_analysis import analyze_statement_file
 from app.services.transaction_categorization.service import (
     bulk_update_transaction_categories,
     categorize_transactions_for_statement,
+    delete_category_rule,
+    list_category_rules,
+    update_category_rule,
     update_transaction_category,
 )
 from app.services.transaction_extraction.service import (
@@ -119,6 +124,26 @@ def search_file_manager(query: str = "", db: Session = Depends(get_db)) -> Searc
 @router.get("/categories/catalog", response_model=CategoryCatalogResponse)
 def read_category_catalog_endpoint() -> CategoryCatalogResponse:
     return CategoryCatalogResponse.from_catalog()
+
+
+@router.get("/category-rules", response_model=list[CategoryRuleResponse])
+def list_category_rules_endpoint(db: Session = Depends(get_db)) -> list[CategoryRuleResponse]:
+    return list_category_rules(db)
+
+
+@router.patch("/category-rules/{rule_id}", response_model=CategoryRuleResponse)
+def update_category_rule_endpoint(
+    rule_id: int,
+    payload: CategoryRuleUpdate,
+    db: Session = Depends(get_db),
+) -> CategoryRuleResponse:
+    return update_category_rule(db, rule_id, payload)
+
+
+@router.delete("/category-rules/{rule_id}", status_code=204)
+def delete_category_rule_endpoint(rule_id: int, db: Session = Depends(get_db)) -> Response:
+    delete_category_rule(db, rule_id)
+    return Response(status_code=204)
 
 
 @router.get("/folders", response_model=list[FolderResponse])

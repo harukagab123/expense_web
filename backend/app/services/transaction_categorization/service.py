@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.transaction import CategoryRule, Transaction
-from app.schemas.transaction import TransactionCategoryBulkUpdate, TransactionCategoryUpdate
+from app.schemas.transaction import CategoryRuleUpdate, TransactionCategoryBulkUpdate, TransactionCategoryUpdate
 from app.services.transaction_categorization.base import (
     MATCH_EXACT,
     MATCH_NORMALIZED_NAME,
@@ -114,6 +114,7 @@ def update_transaction_category(
             payload.main_category,
             payload.subcategory,
             payload.match_type,
+            replace_existing=payload.replace_existing_rule,
         )
 
     transaction.main_category = payload.main_category
@@ -123,7 +124,7 @@ def update_transaction_category(
     transaction.category_status = STATUS_USER_CONFIRMED
     transaction.category_updated_at = datetime.now(UTC)
     transaction.user_edited_category = True
-    transaction.category_rule_id = rule.id if rule is not None else transaction.category_rule_id
+    transaction.category_rule_id = rule.id if rule is not None else None
     from app.services.transaction_review.service import mark_review_needed_after_user_change
 
     mark_review_needed_after_user_change(transaction)
@@ -225,6 +226,37 @@ def _load_user_rules(session: Session) -> list[UserCategoryRule]:
     ]
 
 
+def list_category_rules(session: Session) -> list[CategoryRule]:
+    return list(
+        session.execute(
+            select(CategoryRule).order_by(
+                CategoryRule.pattern.asc(),
+                CategoryRule.match_type.asc(),
+                CategoryRule.id.asc(),
+            )
+        ).scalars().all()
+    )
+
+
+def update_category_rule(session: Session, rule_id: int, payload: CategoryRuleUpdate) -> CategoryRule:
+    rule = session.get(CategoryRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Learned category rule not found.")
+    rule.main_category = payload.main_category
+    rule.subcategory = payload.subcategory
+    session.commit()
+    session.refresh(rule)
+    return rule
+
+
+def delete_category_rule(session: Session, rule_id: int) -> None:
+    rule = session.get(CategoryRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Learned category rule not found.")
+    session.delete(rule)
+    session.commit()
+
+
 def _list_active_transactions(session: Session, statement_id: int) -> list[Transaction]:
     return list(
         session.execute(
@@ -261,9 +293,11 @@ def _create_or_update_rule(
     main_category: str,
     subcategory: str,
     match_type: str | None,
+    *,
+    replace_existing: bool = False,
 ) -> CategoryRule:
     normalized_name = normalized_for_match(transaction.normalized_name or "")
-    if match_type == MATCH_NORMALIZED_NAME and normalized_name:
+    if normalized_name and (match_type is None or match_type == MATCH_NORMALIZED_NAME):
         pattern = normalized_name
         selected_match_type = MATCH_NORMALIZED_NAME
     else:
@@ -291,6 +325,22 @@ def _create_or_update_rule(
         session.add(rule)
         session.flush()
         return rule
+
+    if (rule.main_category, rule.subcategory) != (main_category, subcategory) and not replace_existing:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CATEGORY_RULE_CONFLICT",
+                "message": f'A saved rule already categorizes {rule.pattern.title()} as a different category.',
+                "rule": {
+                    "id": rule.id,
+                    "pattern": rule.pattern,
+                    "main_category": rule.main_category,
+                    "subcategory": rule.subcategory,
+                    "match_type": rule.match_type,
+                },
+            },
+        )
 
     rule.main_category = main_category
     rule.subcategory = subcategory
