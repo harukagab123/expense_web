@@ -203,4 +203,4 @@ On macOS/Linux, after setup:
 
 ## Expense Summary
 
-The Summary page combines authoritative saved transaction records across analyzed statements. It supports tax-year and inclusive custom-date reporting, the approved fixed category order, Needs Review navigation, source-row traceability, retained historical transactions, and a two-sheet Excel export. Only selected, eligible transactions with valid saved categories contribute to totals; the reporting layer never categorizes transactions or resets selections.
+The Summary page combines authoritative saved transaction records across analyzed statements. It supports tax-year and inclusive custom-date reporting, the approved fixed category order, Needs Review navigation, source-row traceability, retained historical transactions, and a minimal black-and-white Excel Summary export. The workbook contains no transaction-detail worksheet. Only selected, eligible transactions with valid saved categories contribute to totals; the reporting layer never categorizes transactions or resets selections.

@@ -104,7 +104,6 @@ def inspect_expense_summary_workbook(
     content: bytes,
     *,
     summary_preview_path: Path | None = None,
-    detail_preview_path: Path | None = None,
 ) -> dict:
     node_modules = _node_modules_path()
     node = _node_executable()
@@ -119,9 +118,6 @@ def inspect_expense_summary_workbook(
         if summary_preview_path is not None:
             summary_preview_path.parent.mkdir(parents=True, exist_ok=True)
             command.append(str(summary_preview_path))
-            if detail_preview_path is not None:
-                detail_preview_path.parent.mkdir(parents=True, exist_ok=True)
-                command.append(str(detail_preview_path))
         completed = subprocess.run(
             command,
             cwd=workdir,
