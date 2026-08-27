@@ -287,3 +287,17 @@ def test_legacy_data_migration_copies_and_verifies_without_deleting_old_data(tmp
     assert sorted(path.name for path in settings.storage_dir.iterdir()) == ["one.pdf", "two.pdf"]
     assert legacy_database.exists() and len(list(legacy_storage.iterdir())) == 2
     get_settings.cache_clear()
+
+
+def test_frozen_release_discovers_only_the_nearby_repository_layout(tmp_path, monkeypatch) -> None:
+    from app.services.maintenance import startup
+
+    release = tmp_path / "project" / "outputs" / "release"
+    release.mkdir(parents=True)
+    executable = release / "PersonalFinanceManager.exe"
+    executable.touch()
+    monkeypatch.setattr(startup.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(startup.sys, "executable", str(executable))
+    monkeypatch.delenv("PFM_LEGACY_ROOT", raising=False)
+
+    assert startup._legacy_roots() == [release.resolve(), (tmp_path / "project").resolve()]

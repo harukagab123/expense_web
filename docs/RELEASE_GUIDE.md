@@ -15,6 +15,8 @@ The authoritative version is `APP_VERSION` in `backend/app/version.py`. Use sema
 
 The installer uses per-user application files and preserves `%LOCALAPPDATA%\PersonalFinanceManager` during uninstall. When updating an existing install, it runs `PersonalFinanceManager.exe --prepare-update <version>` and aborts if a validated safety backup cannot be created.
 
+The portable release build recognizes the repository `data/app.db` and `storage/files` layout when run from `outputs/release`. For a different legacy location, set `PFM_LEGACY_ROOT` only for the first launch. The verified copy is placed in the per-user directory; the legacy originals are never deleted.
+
 ## Rollback
 
 Application installation is handled by the standard installer. Database migrations are handled at launcher startup. Before a pending migration, the launcher creates and validates an automatic backup. If migration fails, it restores the previous database and stops startup. Keep the previous signed installer plus the matching pre-update backup for a complete application-version rollback.

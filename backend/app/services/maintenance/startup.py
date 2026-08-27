@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from contextlib import closing
+import os
 from pathlib import Path
 import shutil
 import sqlite3
+import sys
 
 from app.core.config import Settings, get_settings
 from app.core.resources import SOURCE_ROOT
@@ -24,15 +26,38 @@ def initialize_directories(settings: Settings | None = None) -> None:
         )
 
 
+def _legacy_roots() -> list[Path]:
+    if os.getenv("PFM_SKIP_LEGACY_MIGRATION", "").strip() == "1":
+        return []
+    roots: list[Path] = []
+    configured = os.getenv("PFM_LEGACY_ROOT", "").strip()
+    if configured:
+        roots.append(Path(configured).expanduser())
+    if getattr(sys, "frozen", False):
+        executable_dir = Path(sys.executable).resolve().parent
+        roots.append(executable_dir)
+        if executable_dir.name.casefold() == "release" and executable_dir.parent.name.casefold() == "outputs":
+            roots.append(executable_dir.parent.parent)
+    else:
+        roots.append(SOURCE_ROOT)
+    unique: list[Path] = []
+    for root in roots:
+        resolved = root.resolve()
+        if resolved not in unique:
+            unique.append(resolved)
+    return unique
+
+
 def migrate_legacy_data(settings: Settings | None = None) -> bool:
     settings = settings or get_settings()
     if settings.app_env.lower() != "production" or settings.database_path is None:
         return False
     target_database = settings.database_path
-    legacy_database = SOURCE_ROOT / "data" / "app.db"
-    legacy_storage = SOURCE_ROOT / "storage" / "files"
-    if target_database.exists() or not legacy_database.is_file():
+    legacy_root = next((root for root in _legacy_roots() if (root / "data" / "app.db").is_file()), None)
+    if target_database.exists() or legacy_root is None:
         return False
+    legacy_database = legacy_root / "data" / "app.db"
+    legacy_storage = legacy_root / "storage" / "files"
     if any(settings.storage_dir.iterdir()):
         return False
     staged_storage = settings.storage_dir.with_name(settings.storage_dir.name + ".legacy-copy")
