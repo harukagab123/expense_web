@@ -13,10 +13,45 @@ from app.db.session import get_session_factory
 from app.models.file import StoredFile
 from app.models.statement import Statement
 from app.models.transaction import Transaction
+from app.services.expense_summary.service import build_expense_summary, reconcile_expense_summary
 from app.services.transaction_categorization.base import CATEGORY_CATALOG, CATEGORY_PRIORITY
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "phase9_summary_qa.json"
 FIXTURE = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+EXPECTED_2026_CONTRIBUTOR_KEYS = {
+    "gas-chase",
+    "auto-insurance",
+    "maintenance",
+    "parking",
+    "tires",
+    "tolls",
+    "car-payment",
+    "home-insurance",
+    "rent",
+    "repairs",
+    "utilities",
+    "telecom",
+    "home-other",
+    "materials",
+    "advertising",
+    "interest",
+    "legal",
+    "office",
+    "travel",
+    "meals",
+    "transportation",
+    "government",
+    "donations",
+    "bank-membership",
+    "medical",
+    "education",
+    "other-supplies",
+    "gas-amex",
+    "gas-capital-one",
+    "gas-historical",
+    "office-review",
+    "advertising-credit",
+}
 
 
 def populate_summary_fixture() -> dict[str, int]:
@@ -89,7 +124,7 @@ def subcategory_map(payload: dict) -> dict[str, dict]:
 
 
 def test_summary_reconciles_all_categories_sources_selections_and_statuses(client: TestClient) -> None:
-    populate_summary_fixture()
+    keys = populate_summary_fixture()
     response = client.get("/api/summary?tax_year=2026")
 
     assert response.status_code == 200, response.text
@@ -104,10 +139,20 @@ def test_summary_reconciles_all_categories_sources_selections_and_statuses(clien
         "needs_review_count": expected["needs_review_count"],
         "source_count": expected["source_count"],
         "not_applicable_count": expected["not_applicable_count"],
+        "selected_non_expense_count": expected["selected_non_expense_count"],
         "unselected_count": expected["unselected_count"],
         "other_supplies_count": expected["other_supplies_count"],
     }
     assert payload["readiness"] == "REVIEW_REQUIRED"
+    assert len(FIXTURE["transactions"]) == 50
+    expected_ids = {keys[key] for key in EXPECTED_2026_CONTRIBUTOR_KEYS}
+    actual_ids = {
+        transaction["id"]
+        for group in payload["groups"]
+        for subcategory in group["subcategories"]
+        for transaction in subcategory["transactions"]
+    }
+    assert actual_ids == expected_ids
     assert [group["id"] for group in payload["groups"]] == [category.id for category in CATEGORY_CATALOG]
     assert [
         (group["id"], subcategory["id"])
@@ -120,6 +165,26 @@ def test_summary_reconciles_all_categories_sources_selections_and_statuses(clien
         assert sum(Decimal(item["total"]) for item in group["subcategories"]) == Decimal(group["total"])
         for item in group["subcategories"]:
             assert sum(Decimal(row["amount"]) for row in item["transactions"]) == Decimal(item["total"])
+
+    expected_by_subcategory: dict[str, set[int]] = {}
+    for case in FIXTURE["transactions"]:
+        if case["key"] in EXPECTED_2026_CONTRIBUTOR_KEYS:
+            expected_by_subcategory.setdefault(case["subcategory"], set()).add(keys[case["key"]])
+    for subcategory_id, item in subcategory_map(payload).items():
+        assert {row["id"] for row in item["transactions"]} == expected_by_subcategory.get(subcategory_id, set())
+
+    with get_session_factory()() as session:
+        expected_transactions = [session.get(Transaction, transaction_id) for transaction_id in expected_ids]
+        assert all(expected_transactions)
+        reconciliation = reconcile_expense_summary(
+            expected_transactions,
+            build_expense_summary(session, tax_year=2026),
+        )
+    assert reconciliation.missing_transaction_ids == ()
+    assert reconciliation.unexpected_transaction_ids == ()
+    assert reconciliation.expected_total == Decimal("4135.00")
+    assert reconciliation.summary_total == Decimal("4135.00")
+    assert reconciliation.difference == Decimal("0.00")
 
 
 def test_year_and_inclusive_custom_date_filters_use_transaction_date(client: TestClient) -> None:
@@ -275,6 +340,58 @@ def test_credit_card_payment_does_not_double_count_underlying_purchases(client: 
     assert payload["grand_total"] == FIXTURE["expected"]["grand_total"]
 
 
+def test_user_confirmed_category_makes_selected_unknown_type_expense_reportable(
+    client: TestClient,
+) -> None:
+    keys = populate_summary_fixture()
+    transaction_id = keys["missing-category"]
+    with get_session_factory()() as session:
+        transaction = session.get(Transaction, transaction_id)
+        assert transaction is not None
+        transaction.transaction_type = "UNKNOWN"
+        transaction.type_status = "NEEDS_REVIEW"
+        transaction.include_in_expenses = True
+        session.commit()
+
+    category = client.patch(
+        f"/api/transactions/{transaction_id}/category",
+        json={"main_category": "AUTO_EXPENSE", "subcategory": "AUTO_GAS"},
+    )
+    payload = client.get("/api/summary?tax_year=2026").json()
+    gas = subcategory_map(payload)["AUTO_GAS"]
+    contributing_ids = {row["id"] for row in gas["transactions"]}
+
+    assert category.status_code == 200, category.text
+    assert category.json()["category_status"] == "USER_CONFIRMED"
+    assert transaction_id in contributing_ids
+    assert gas["total"] == "365.00"
+    assert payload["grand_total"] == "4175.00"
+    assert any(row["id"] == transaction_id for row in payload["needs_review_transactions"])
+
+
+def test_valid_saved_category_is_not_dropped_by_stale_not_categorized_status(
+    client: TestClient,
+) -> None:
+    keys = populate_summary_fixture()
+    transaction_id = keys["missing-category"]
+    with get_session_factory()() as session:
+        transaction = session.get(Transaction, transaction_id)
+        assert transaction is not None
+        transaction.main_category = "PROFIT_LOSS_BUSINESS"
+        transaction.subcategory = "BUSINESS_OFFICE_EXPENSE"
+        transaction.category_status = "NOT_CATEGORIZED"
+        transaction.include_in_expenses = True
+        session.commit()
+
+    payload = client.get("/api/summary?tax_year=2026").json()
+    office = subcategory_map(payload)["BUSINESS_OFFICE_EXPENSE"]
+
+    assert transaction_id in {row["id"] for row in office["transactions"]}
+    assert office["total"] == "270.00"
+    assert payload["grand_total"] == "4175.00"
+    assert any(row["id"] == transaction_id for row in payload["needs_review_transactions"])
+
+
 def test_excel_export_reopens_with_summary_and_reconciling_transaction_detail(
     client: TestClient,
 ) -> None:
@@ -309,6 +426,7 @@ def test_excel_export_reopens_with_summary_and_reconciling_transaction_detail(
     assert summary_labels.index("Education & Learning") < summary_labels.index("Other Supplies")
     detail_headers = inspection["detailValues"][0]
     assert detail_headers == [
+        "Transaction ID",
         "Date",
         "Name",
         "Transaction Detail",
@@ -323,13 +441,20 @@ def test_excel_export_reopens_with_summary_and_reconciling_transaction_detail(
         "Review Status",
     ]
     detail_rows = inspection["detailValues"][1:]
-    detail_total_row = next(row for row in detail_rows if row[8] == "TOTAL INCLUDED EXPENSES")
-    assert Decimal(str(detail_total_row[9])) == Decimal(FIXTURE["expected"]["grand_total"])
-    transaction_rows = [row for row in detail_rows if isinstance(row[0], date)]
+    detail_total_row = next(row for row in detail_rows if row[9] == "TOTAL INCLUDED EXPENSES")
+    assert Decimal(str(detail_total_row[10])) == Decimal(FIXTURE["expected"]["grand_total"])
+    transaction_rows = [row for row in detail_rows if isinstance(row[1], date)]
     assert len(transaction_rows) == FIXTURE["expected"]["contributing_transaction_count"]
-    assert sum(Decimal(str(row[9])) for row in transaction_rows) == Decimal(
+    assert sum(Decimal(str(row[10])) for row in transaction_rows) == Decimal(
         FIXTURE["expected"]["grand_total"]
     )
+    summary_ids = {
+        row["id"]
+        for group in client.get("/api/summary?tax_year=2026").json()["groups"]
+        for subcategory in group["subcategories"]
+        for row in subcategory["transactions"]
+    }
+    assert {row[0] for row in transaction_rows} == summary_ids
     exported_text = " ".join(str(value) for row in inspection["detailValues"] for value in row if value)
     assert "CHEVRON SYNTHETIC" in exported_text
     assert "chase-synthetic.pdf" in exported_text

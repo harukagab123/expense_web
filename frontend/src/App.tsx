@@ -5,8 +5,6 @@ import {
   ApiRequestError,
   analyzeStatementFile,
   bulkUpdateTransactionReview,
-  bulkUpdateTransactionCategories,
-  bulkUpdateTransactionInclusion,
   createTransactionForStatement,
   createFolder,
   confirmStatementTerm,
@@ -63,9 +61,7 @@ import type {
   CategorySubcategoryValue,
   TransactionDirection,
   TransactionExtraction,
-  TransactionCategoryBulkPayload,
   TransactionCategoryPayload,
-  TransactionInclusionBulkPayload,
   TransactionInclusionPayload,
   TransactionNormalizationPayload,
   TransactionPayload,
@@ -172,12 +168,6 @@ type CategoryFormValues = {
   main_category: CategoryMainValue;
   subcategory: CategorySubcategoryValue;
   use_for_future: boolean;
-};
-
-type BulkCategoryFormValues = {
-  main_category: CategoryMainValue;
-  subcategory: CategorySubcategoryValue;
-  overwrite_user_edits: boolean;
 };
 
 const emptyTree: FileManagerTree = {
@@ -571,18 +561,6 @@ function validateCategoryForm(values: CategoryFormValues, categoryOptions: Categ
   return "";
 }
 
-function bulkCategoryPayloadFromValues(
-  selectedTransactionIds: number[],
-  values: BulkCategoryFormValues,
-): TransactionCategoryBulkPayload {
-  return {
-    transaction_ids: selectedTransactionIds,
-    main_category: values.main_category,
-    subcategory: values.subcategory,
-    overwrite_user_edits: values.overwrite_user_edits,
-  };
-}
-
 function transactionIncluded(transaction: StatementTransaction): boolean {
   return transaction.include_in_expenses === true;
 }
@@ -624,6 +602,16 @@ function transactionMatchesInclusionFilter(transaction: StatementTransaction, fi
 function transactionInclusionWarning(transaction: StatementTransaction): string | null {
   const type = transactionTypeValue(transaction);
   const suggestion = transactionSuggestedInclude(transaction);
+  const included = transactionIncluded(transaction);
+  if (
+    included &&
+    ["INCOME", "TRANSFER", "CREDIT_CARD_PAYMENT", "REFUND", "ATM_CASH_WITHDRAWAL", "CHECK", "OTHER"].includes(type)
+  ) {
+    return "Selected - transaction type is excluded from Summary";
+  }
+  if (included && type === "UNKNOWN" && !transaction.user_edited_category) {
+    return "Selected - resolve transaction type before Summary";
+  }
   if (type === "CREDIT_CARD_PAYMENT") {
     return "Recommended Exclude - may duplicate card purchases";
   }
@@ -2322,25 +2310,6 @@ function FileDetails({
     return transaction;
   }
 
-  async function handleBulkUpdateTransactionCategories(payload: TransactionCategoryBulkPayload): Promise<number[]> {
-    if (!statement) {
-      return [];
-    }
-    setTransactionError("");
-    const response = await bulkUpdateTransactionCategories(payload);
-    await refreshTransactions(statement.id);
-    await onAttentionRefresh();
-    return response.skipped_transaction_ids;
-  }
-
-  async function handleBulkUpdateTransactionInclusion(payload: TransactionInclusionBulkPayload): Promise<number[]> {
-    setTransactionError("");
-    const response = await bulkUpdateTransactionInclusion(payload);
-    setTransactions((current) => mergeUpdatedTransactions(current, response.transactions));
-    await onAttentionRefresh();
-    return response.skipped_transaction_ids;
-  }
-
   async function handleBulkUpdateTransactionReview(payload: TransactionReviewBulkPayload): Promise<number[]> {
     setTransactionError("");
     const response = await bulkUpdateTransactionReview(payload);
@@ -2415,13 +2384,11 @@ function FileDetails({
           isLoading={isTransactionsLoading}
           latestExtraction={latestExtraction}
           onAdd={handleCreateTransaction}
-          onBulkEditCategories={handleBulkUpdateTransactionCategories}
           onEdit={handleUpdateTransaction}
           onEditNormalization={handleUpdateTransactionNormalization}
           onEditCategory={handleUpdateTransactionCategory}
           onEditInclusion={handleUpdateTransactionInclusion}
           onExclude={handleExcludeTransaction}
-          onBulkEditInclusion={handleBulkUpdateTransactionInclusion}
           onBulkEditReview={handleBulkUpdateTransactionReview}
           onTransactionsUpdate={(updater) => setTransactions((current) => updater(current))}
           attentionTarget={
@@ -2855,8 +2822,6 @@ function TransactionPanel({
   isLoading,
   latestExtraction,
   onAdd,
-  onBulkEditCategories,
-  onBulkEditInclusion,
   onBulkEditReview,
   onEdit,
   onEditCategory,
@@ -2875,8 +2840,6 @@ function TransactionPanel({
   isLoading: boolean;
   latestExtraction: TransactionExtraction | null;
   onAdd: (payload: Required<TransactionPayload>) => Promise<void>;
-  onBulkEditCategories: (payload: TransactionCategoryBulkPayload) => Promise<number[]>;
-  onBulkEditInclusion: (payload: TransactionInclusionBulkPayload) => Promise<number[]>;
   onBulkEditReview: (payload: TransactionReviewBulkPayload) => Promise<number[]>;
   onEdit: (transactionId: number, payload: TransactionPayload) => Promise<void>;
   onEditCategory: (transactionId: number, payload: TransactionCategoryPayload) => Promise<void>;
@@ -2897,16 +2860,6 @@ function TransactionPanel({
   const [normalizationFilter, setNormalizationFilter] = useState<NormalizationFilter>("all");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [inclusionFilter, setInclusionFilter] = useState<InclusionFilter>("all");
-  const [selectedTransactionIds, setSelectedTransactionIds] = useState<Set<number>>(new Set());
-  const [bulkCategoryFormValues, setBulkCategoryFormValues] = useState<BulkCategoryFormValues>({
-    main_category: "PROFIT_LOSS_BUSINESS",
-    subcategory: defaultSubcategoryFor(categoryOptions, "PROFIT_LOSS_BUSINESS"),
-    overwrite_user_edits: false,
-  });
-  const [bulkCategoryError, setBulkCategoryError] = useState("");
-  const [bulkCategoryNotice, setBulkCategoryNotice] = useState("");
-  const [isSavingBulkCategory, setIsSavingBulkCategory] = useState(false);
-  const [isSavingBulkInclusion, setIsSavingBulkInclusion] = useState(false);
   const [isSavingBulkReview, setIsSavingBulkReview] = useState(false);
   const [inclusionError, setInclusionError] = useState("");
   const [inclusionNotice, setInclusionNotice] = useState("");
@@ -2917,8 +2870,6 @@ function TransactionPanel({
   const [inlineEditValues, setInlineEditValues] = useState<InlineTransactionEditValues | null>(null);
   const [inlineEditError, setInlineEditError] = useState("");
   const [isSavingInlineEdit, setIsSavingInlineEdit] = useState(false);
-  const bulkHeaderCheckboxRef = useRef<HTMLInputElement>(null);
-  const inclusionHeaderCheckboxRef = useRef<HTMLInputElement>(null);
   const inclusionRequestVersions = useRef<Map<number, number>>(new Map());
   const handledAttentionRef = useRef("");
   const reviewCount = transactions.filter((transaction) => transaction.needs_review).length;
@@ -2940,7 +2891,6 @@ function TransactionPanel({
       .every((transaction) => transactionReviewStatus(transaction) === "REVIEWED");
   const selectedTotalCents = selectedAmountCents(transactions);
   const isActionBusy = isAnalyzing || isLoading;
-  const selectedIds = useMemo(() => Array.from(selectedTransactionIds), [selectedTransactionIds]);
   const visibleTransactions = useMemo(() => {
     return transactions.filter(
       (transaction) =>
@@ -2975,15 +2925,6 @@ function TransactionPanel({
       return (left.source_order - right.source_order || left.id - right.id) * multiplier;
     });
   }, [sortBy, sortDirection, visibleTransactions]);
-  const visibleTransactionIds = useMemo(
-    () => sortedTransactions.map((transaction) => transaction.id),
-    [sortedTransactions],
-  );
-  const allVisibleBulkSelected =
-    visibleTransactionIds.length > 0 && visibleTransactionIds.every((transactionId) => selectedTransactionIds.has(transactionId));
-  const visibleIncludedCount = sortedTransactions.filter(transactionIncluded).length;
-  const allVisibleIncluded = sortedTransactions.length > 0 && visibleIncludedCount === sortedTransactions.length;
-  const someVisibleIncluded = visibleIncludedCount > 0 && visibleIncludedCount < sortedTransactions.length;
   const editingTransaction = useMemo(
     () => transactions.find((transaction) => transaction.id === editingTransactionId) ?? null,
     [editingTransactionId, transactions],
@@ -3024,27 +2965,6 @@ function TransactionPanel({
     },
     [categoryOptions, editingTransactionId, hasUnsavedInlineEdit],
   );
-
-  useEffect(() => {
-    if (bulkHeaderCheckboxRef.current) {
-      bulkHeaderCheckboxRef.current.indeterminate =
-        visibleTransactionIds.some((transactionId) => selectedTransactionIds.has(transactionId)) && !allVisibleBulkSelected;
-    }
-  }, [allVisibleBulkSelected, selectedTransactionIds, visibleTransactionIds]);
-
-  useEffect(() => {
-    if (inclusionHeaderCheckboxRef.current) {
-      inclusionHeaderCheckboxRef.current.indeterminate = someVisibleIncluded;
-    }
-  }, [someVisibleIncluded]);
-
-  useEffect(() => {
-    setSelectedTransactionIds((current) => {
-      const availableIds = new Set(transactions.map((transaction) => transaction.id));
-      const next = new Set([...current].filter((transactionId) => availableIds.has(transactionId)));
-      return next.size === current.size ? current : next;
-    });
-  }, [transactions]);
 
   useEffect(() => {
     if (editingTransactionId !== null && !transactions.some((transaction) => transaction.id === editingTransactionId)) {
@@ -3271,42 +3191,6 @@ function TransactionPanel({
     setFormValues((current) => ({ ...current, [field]: value }));
   }
 
-  function updateBulkCategoryFormValue(field: "main_category", value: CategoryMainValue): void;
-  function updateBulkCategoryFormValue(field: "subcategory", value: CategorySubcategoryValue): void;
-  function updateBulkCategoryFormValue(field: "overwrite_user_edits", value: boolean): void;
-  function updateBulkCategoryFormValue(
-    field: keyof BulkCategoryFormValues,
-    value: CategoryMainValue | CategorySubcategoryValue | boolean,
-  ) {
-    if (field === "main_category" && typeof value === "string" && isCategoryMainValue(value)) {
-      setBulkCategoryFormValues((current) => ({
-        ...current,
-        main_category: value,
-        subcategory: defaultSubcategoryFor(categoryOptions, value),
-      }));
-    }
-    if (field === "subcategory" && typeof value === "string" && isCategorySubcategoryValue(value)) {
-      setBulkCategoryFormValues((current) => ({ ...current, subcategory: value }));
-    }
-    if (field === "overwrite_user_edits" && typeof value === "boolean") {
-      setBulkCategoryFormValues((current) => ({ ...current, overwrite_user_edits: value }));
-    }
-  }
-
-  function toggleTransactionSelection(transactionId: number, checked: boolean) {
-    setSelectedTransactionIds((current) => {
-      const next = new Set(current);
-      if (checked) {
-        next.add(transactionId);
-      } else {
-        next.delete(transactionId);
-      }
-      return next;
-    });
-    setBulkCategoryError("");
-    setBulkCategoryNotice("");
-  }
-
   async function handleToggleExpenseInclusion(transaction: StatementTransaction, checked: boolean) {
     const previousTransaction = transaction;
     const nextVersion = (inclusionRequestVersions.current.get(transaction.id) ?? 0) + 1;
@@ -3356,42 +3240,6 @@ function TransactionPanel({
         transaction.id === transactionId ? { ...transaction, ...patch } : transaction,
       ),
     );
-  }
-
-  async function handleBulkInclusion(transactionIds: number[], include: boolean, scopeLabel: string) {
-    if (transactionIds.length === 0) {
-      setInclusionError("No transactions match this action.");
-      setInclusionNotice("");
-      return;
-    }
-    setIsSavingBulkInclusion(true);
-    setInclusionError("");
-    setInclusionNotice("");
-    try {
-      const skippedIds = await onBulkEditInclusion({
-        transaction_ids: transactionIds,
-        include_in_expenses: include,
-      });
-      const changedCount = transactionIds.length - skippedIds.length;
-      setInclusionNotice(
-        `${include ? "Included" : "Excluded"} ${changedCount} ${scopeLabel} transaction${changedCount === 1 ? "" : "s"}.`,
-      );
-    } catch (caught) {
-      setInclusionError(caught instanceof Error ? caught.message : "Could not save transaction selections.");
-    } finally {
-      setIsSavingBulkInclusion(false);
-    }
-  }
-
-  function handleAllTransactionsInclusion(include: boolean) {
-    const action = include ? "Select" : "Deselect";
-    const confirmed = window.confirm(
-      `${action} all ${transactions.length} transactions?\n\nThis will replace your current transaction selections.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-    void handleBulkInclusion(transactions.map((transaction) => transaction.id), include, "total");
   }
 
   async function handleMarkListReviewed() {
@@ -3451,22 +3299,6 @@ function TransactionPanel({
     ].filter(Boolean).join(" ");
   }
 
-  function toggleVisibleTransactions(checked: boolean) {
-    setSelectedTransactionIds((current) => {
-      const next = new Set(current);
-      visibleTransactionIds.forEach((transactionId) => {
-        if (checked) {
-          next.add(transactionId);
-        } else {
-          next.delete(transactionId);
-        }
-      });
-      return next;
-    });
-    setBulkCategoryError("");
-    setBulkCategoryNotice("");
-  }
-
   async function handleSubmitTransaction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const validationMessage = validateTransactionForm(formValues);
@@ -3485,42 +3317,6 @@ function TransactionPanel({
       setFormError(caught instanceof Error ? caught.message : "Transaction could not be saved.");
     } finally {
       setIsSaving(false);
-    }
-  }
-
-  async function handleSubmitBulkCategory(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (selectedIds.length === 0) {
-      setBulkCategoryError("Select at least one transaction.");
-      setBulkCategoryNotice("");
-      return;
-    }
-
-    const formErrorMessage = validateCategoryForm(
-      { ...bulkCategoryFormValues, use_for_future: false },
-      categoryOptions,
-    );
-    if (formErrorMessage) {
-      setBulkCategoryError(formErrorMessage);
-      setBulkCategoryNotice("");
-      return;
-    }
-
-    setIsSavingBulkCategory(true);
-    setBulkCategoryError("");
-    setBulkCategoryNotice("");
-    try {
-      const skippedIds = await onBulkEditCategories(bulkCategoryPayloadFromValues(selectedIds, bulkCategoryFormValues));
-      setSelectedTransactionIds(new Set());
-      if (skippedIds.length > 0) {
-        setBulkCategoryNotice(
-          `${skippedIds.length} protected or unavailable transaction${skippedIds.length === 1 ? "" : "s"} skipped.`,
-        );
-      }
-    } catch (caught) {
-      setBulkCategoryError(caught instanceof Error ? caught.message : "Categories could not be saved.");
-    } finally {
-      setIsSavingBulkCategory(false);
     }
   }
 
@@ -3672,113 +3468,6 @@ function TransactionPanel({
         </label>
       </div>
 
-      {transactions.length > 0 ? (
-        <div className="transaction-bulk-grid">
-          <div className="transaction-bulk-bar">
-            <span>{includedCount} included</span>
-            <button
-              disabled={isSavingBulkInclusion || visibleTransactionIds.length === 0}
-              onClick={() => void handleBulkInclusion(visibleTransactionIds, true, "visible")}
-              type="button"
-            >
-              Select All Visible
-            </button>
-            <button
-              disabled={isSavingBulkInclusion || visibleTransactionIds.length === 0}
-              onClick={() => void handleBulkInclusion(visibleTransactionIds, false, "visible")}
-              type="button"
-            >
-              Deselect All Visible
-            </button>
-            <button
-              disabled={isSavingBulkInclusion || transactions.length === 0}
-              onClick={() => handleAllTransactionsInclusion(true)}
-              type="button"
-            >
-              Select All Transactions
-            </button>
-            <button
-              disabled={isSavingBulkInclusion || transactions.length === 0}
-              onClick={() => handleAllTransactionsInclusion(false)}
-              type="button"
-            >
-              Deselect All Transactions
-            </button>
-            <button
-              disabled={isSavingBulkInclusion || selectedIds.length === 0}
-              onClick={() => void handleBulkInclusion(selectedIds, true, "bulk-selected")}
-              type="button"
-            >
-              Bulk Include
-            </button>
-            <button
-              disabled={isSavingBulkInclusion || selectedIds.length === 0}
-              onClick={() => void handleBulkInclusion(selectedIds, false, "bulk-selected")}
-              type="button"
-            >
-              Bulk Exclude
-            </button>
-          </div>
-          <form className="transaction-bulk-bar" onSubmit={(event) => void handleSubmitBulkCategory(event)}>
-            <span>{selectedIds.length} bulk selected</span>
-            <label>
-              <span>Set Category</span>
-              <select
-                value={bulkCategoryFormValues.main_category}
-                onChange={(event) =>
-                  updateBulkCategoryFormValue("main_category", event.target.value as CategoryMainValue)
-                }
-              >
-                {categoryOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Set Subcategory</span>
-              <select
-                value={bulkCategoryFormValues.subcategory}
-                onChange={(event) =>
-                  updateBulkCategoryFormValue("subcategory", event.target.value as CategorySubcategoryValue)
-                }
-              >
-                {subcategoryOptionsFor(categoryOptions, bulkCategoryFormValues.main_category).map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="checkbox-label transaction-bulk-bar__checkbox">
-              <input
-                checked={bulkCategoryFormValues.overwrite_user_edits}
-                type="checkbox"
-                onChange={(event) => updateBulkCategoryFormValue("overwrite_user_edits", event.target.checked)}
-              />
-              <span>Overwrite category edits</span>
-            </label>
-            <button disabled={isActionBusy || isSavingBulkCategory || selectedIds.length === 0} type="submit">
-              {isSavingBulkCategory ? "Saving..." : "Set Category"}
-            </button>
-            <button
-              disabled={isSavingBulkCategory || selectedIds.length === 0}
-              onClick={() => {
-                setSelectedTransactionIds(new Set());
-                setBulkCategoryError("");
-                setBulkCategoryNotice("");
-              }}
-              type="button"
-            >
-              Clear
-            </button>
-            {bulkCategoryError ? <span className="transaction-bulk-bar__error">{bulkCategoryError}</span> : null}
-            {bulkCategoryNotice ? <span className="transaction-bulk-bar__notice">{bulkCategoryNotice}</span> : null}
-          </form>
-        </div>
-      ) : null}
-
       {transactions.length === 0 && !isLoading ? (
         <div className="transaction-empty">No transactions extracted yet.</div>
       ) : null}
@@ -3793,32 +3482,7 @@ function TransactionPanel({
             <thead>
               <tr>
                 <th className="transaction-include-cell">
-                  <label className="transaction-checkbox-heading">
-                    <span>Include in Expenses</span>
-                    <input
-                      ref={inclusionHeaderCheckboxRef}
-                      aria-label="Include visible transactions in expense summary"
-                      checked={allVisibleIncluded}
-                      className="transaction-table__select"
-                      disabled={visibleTransactionIds.length === 0 || isSavingBulkInclusion}
-                      onChange={(event) => void handleBulkInclusion(visibleTransactionIds, event.target.checked, "visible")}
-                      type="checkbox"
-                    />
-                  </label>
-                </th>
-                <th className="transaction-select-cell">
-                  <label className="transaction-checkbox-heading">
-                    <span>Bulk Select</span>
-                    <input
-                      ref={bulkHeaderCheckboxRef}
-                      aria-label="Select visible transactions for bulk edits"
-                      checked={allVisibleBulkSelected}
-                      className="transaction-table__select"
-                      disabled={visibleTransactionIds.length === 0}
-                      onChange={(event) => toggleVisibleTransactions(event.target.checked)}
-                      type="checkbox"
-                    />
-                  </label>
+                  <span>Include in Expenses</span>
                 </th>
                 <th>Date</th>
                 <th>Name</th>
@@ -3837,7 +3501,6 @@ function TransactionPanel({
                 const currentMainCategory = categoryMainValue(transaction);
                 const currentSubcategory = categorySubcategoryValue(transaction);
                 const needsCategoryReview = categoryNeedsReview(transaction);
-                const isBulkSelected = selectedTransactionIds.has(transaction.id);
                 const isIncluded = transactionIncluded(transaction);
                 const needsPhase8Review = transactionNeedsPhase8Review(transaction);
                 const inclusionWarning = transactionInclusionWarning(transaction);
@@ -3881,15 +3544,6 @@ function TransactionPanel({
                         <span className="transaction-include-saving">Saving</span>
                       ) : null}
                       {inclusionWarning ? <span className="transaction-badge">{inclusionWarning}</span> : null}
-                    </td>
-                    <td className="transaction-select-cell">
-                      <input
-                        aria-label={`Select transaction ${transaction.source_order} for bulk edits`}
-                        checked={isBulkSelected}
-                        className="transaction-table__select"
-                        onChange={(event) => toggleTransactionSelection(transaction.id, event.target.checked)}
-                        type="checkbox"
-                      />
                     </td>
                     <td className={attentionCellClass(transaction.id, "transaction_date")}>
                       {editValues ? (
@@ -4701,7 +4355,7 @@ function SummaryPage({ onOpenTransaction }: { onOpenTransaction: (transaction: S
               <strong>{formatMoney(summary.grand_total)}</strong>
             </article>
             <article>
-              <span>Selected Transactions</span>
+              <span>Included Transactions</span>
               <strong>{summary.metrics.contributing_transaction_count}</strong>
             </article>
             <button
@@ -4724,6 +4378,12 @@ function SummaryPage({ onOpenTransaction }: { onOpenTransaction: (transaction: S
               <strong>{summary.metrics.needs_review_count} included {summary.metrics.needs_review_count === 1 ? "transaction needs" : "transactions need"} review</strong>
               <span>Open the unresolved transactions and return to their source records.</span>
             </button>
+          ) : null}
+
+          {summary.metrics.selected_non_expense_count > 0 ? (
+            <div className="summary-message summary-message--review">
+              {summary.metrics.selected_non_expense_count} selected {summary.metrics.selected_non_expense_count === 1 ? "transaction is" : "transactions are"} excluded because the saved transaction type is not expense-eligible (for example, a payment, transfer, income, or refund).
+            </div>
           ) : null}
 
           {periodTransactionCount === 0 ? (

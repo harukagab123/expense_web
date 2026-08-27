@@ -219,6 +219,7 @@ export type ExpenseSummary = {
     needs_review_count: number;
     source_count: number;
     not_applicable_count: number;
+    selected_non_expense_count: number;
     unselected_count: number;
     other_supplies_count: number;
   };
@@ -375,16 +376,6 @@ export type TransactionTypeBulkUpdateResponse = {
   skipped_transaction_ids: number[];
 };
 
-export type TransactionCategoryBulkUpdateResponse = {
-  transactions: StatementTransaction[];
-  skipped_transaction_ids: number[];
-};
-
-export type TransactionInclusionBulkUpdateResponse = {
-  transactions: StatementTransaction[];
-  skipped_transaction_ids: number[];
-};
-
 export type TransactionReviewBulkUpdateResponse = {
   transactions: StatementTransaction[];
   skipped_transaction_ids: number[];
@@ -450,19 +441,7 @@ export type StatementTerm = {
   updated_at: string;
 };
 
-export type TransactionCategoryBulkPayload = {
-  transaction_ids: number[];
-  main_category: CategoryMainValue;
-  subcategory: CategorySubcategoryValue;
-  overwrite_user_edits?: boolean;
-};
-
 export type TransactionInclusionPayload = {
-  include_in_expenses: boolean;
-};
-
-export type TransactionInclusionBulkPayload = {
-  transaction_ids: number[];
   include_in_expenses: boolean;
 };
 

@@ -20,12 +20,8 @@ import type {
   TransactionTypeClassificationRunResponse,
   TransactionTypePayload,
   TransactionCategorizationRunResponse,
-  TransactionCategoryBulkPayload,
-  TransactionCategoryBulkUpdateResponse,
   TransactionCategoryPayload,
   TransactionExtractionRunResponse,
-  TransactionInclusionBulkPayload,
-  TransactionInclusionBulkUpdateResponse,
   TransactionInclusionPayload,
   TransactionListResponse,
   TransactionNormalizationPayload,
@@ -322,29 +318,11 @@ export async function updateTransactionCategory(
   });
 }
 
-export async function bulkUpdateTransactionCategories(
-  payload: TransactionCategoryBulkPayload,
-): Promise<TransactionCategoryBulkUpdateResponse> {
-  return requestJson<TransactionCategoryBulkUpdateResponse>("/api/transactions/bulk-category", {
-    method: "PATCH",
-    json: payload,
-  });
-}
-
 export async function updateTransactionInclusion(
   transactionId: number,
   payload: TransactionInclusionPayload,
 ): Promise<StatementTransaction> {
   return requestJson<StatementTransaction>(`/api/transactions/${transactionId}/inclusion`, {
-    method: "PATCH",
-    json: payload,
-  });
-}
-
-export async function bulkUpdateTransactionInclusion(
-  payload: TransactionInclusionBulkPayload,
-): Promise<TransactionInclusionBulkUpdateResponse> {
-  return requestJson<TransactionInclusionBulkUpdateResponse>("/api/transactions/bulk-inclusion", {
     method: "PATCH",
     json: payload,
   });

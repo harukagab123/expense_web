@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 import hashlib
 import json
@@ -15,6 +16,8 @@ from sqlalchemy import text
 from app.core.config import get_settings
 from app.db.session import get_engine, get_session_factory
 from app.models.transaction import Transaction
+from app.models.file import StoredFile
+from app.models.statement import Statement
 from app.services.maintenance.backups import BackupError, create_backup, restore_backup, validate_backup
 from app.services.maintenance.diagnostics import create_diagnostic_bundle
 from app.services.maintenance.health import maintenance_status
@@ -56,7 +59,7 @@ def test_backup_zip_manifest_integrity_storage_and_retention(client: TestClient,
 
     manual = create_backup(kind="manual")
     manifest = validate_backup(manual)
-    assert manifest["app_version"] == "1.0.0"
+    assert manifest["app_version"] == "1.0.1"
     assert manifest["storage_file_count"] == 1
     assert "files" in manifest["table_counts"]
     with zipfile.ZipFile(manual) as archive:
@@ -197,6 +200,80 @@ def test_first_run_and_existing_user_startup_apply_migrations_once(temp_database
     second_backup = prepare_application(settings)
     assert second_backup is None
     assert maintenance_status(integrity=True)["database"]["status"] == "healthy"
+
+
+def test_version_update_creates_backup_and_preserves_mixed_selections(
+    temp_database_url: str,
+) -> None:
+    settings = get_settings()
+    assert prepare_application(settings) is None
+    settings_metadata = settings.config_dir / "settings.json"
+    settings_metadata.write_text(
+        json.dumps({"app_version": "1.0.0", "automatic_backup_retention": 10}),
+        encoding="utf-8",
+    )
+
+    with get_session_factory()() as session:
+        statement = Statement(
+            file=StoredFile(
+                original_filename="upgrade-synthetic.pdf",
+                display_name="upgrade-synthetic.pdf",
+                stored_filename="upgrade-synthetic.pdf",
+                storage_path="upgrade-synthetic.pdf",
+                mime_type="application/pdf",
+                file_size=1,
+            ),
+            document_type="BANK_STATEMENT",
+            institution="SYNTHETIC",
+            account_type="CHECKING",
+            statement_start_date=date(2026, 1, 1),
+            statement_end_date=date(2026, 12, 31),
+            detection_status="DETECTED",
+        )
+        session.add(statement)
+        session.flush()
+        selected = Transaction(
+            statement=statement,
+            transaction_date=date(2026, 1, 1),
+            transaction_detail="UPGRADE SELECTED SYNTHETIC",
+            amount=Decimal("10.00"),
+            direction="OUTFLOW",
+            source_order=1,
+            transaction_type="EXPENSE",
+            main_category="AUTO_EXPENSE",
+            subcategory="AUTO_GAS",
+            category_status="CATEGORIZED",
+            include_in_expenses=True,
+            inclusion_initialized=True,
+        )
+        unselected = Transaction(
+            statement=statement,
+            transaction_date=date(2026, 1, 2),
+            transaction_detail="UPGRADE UNSELECTED SYNTHETIC",
+            amount=Decimal("20.00"),
+            direction="OUTFLOW",
+            source_order=2,
+            transaction_type="EXPENSE",
+            main_category="PROFIT_LOSS_BUSINESS",
+            subcategory="BUSINESS_OFFICE_EXPENSE",
+            category_status="CATEGORIZED",
+            include_in_expenses=False,
+            inclusion_initialized=True,
+        )
+        session.add_all((selected, unselected))
+        session.commit()
+        transaction_ids = (selected.id, unselected.id)
+
+    backup = prepare_application(settings)
+
+    assert backup is not None
+    assert "pre-update-1.0.0-to-1.0.1" in backup.name
+    assert json.loads(settings_metadata.read_text(encoding="utf-8"))["app_version"] == "1.0.1"
+    with get_session_factory()() as session:
+        assert [session.get(Transaction, transaction_id).include_in_expenses for transaction_id in transaction_ids] == [
+            True,
+            False,
+        ]
 
 
 def test_corrupt_database_is_preserved_instead_of_reinitialized(temp_database_url: str) -> None:

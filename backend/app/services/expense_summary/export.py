@@ -100,6 +100,7 @@ def export_expense_summary(summary: ExpenseSummaryResponse) -> ExportedWorkbook:
     detail = workbook.create_sheet("Transaction Detail")
     detail.sheet_view.showGridLines = False
     headers = (
+        "Transaction ID",
         "Date",
         "Name",
         "Transaction Detail",
@@ -127,6 +128,7 @@ def export_expense_summary(summary: ExpenseSummaryResponse) -> ExportedWorkbook:
                 detail_total += amount
                 detail.append(
                     (
+                        transaction.id,
                         transaction.transaction_date,
                         transaction.normalized_name or "",
                         transaction.transaction_detail,
@@ -142,33 +144,34 @@ def export_expense_summary(summary: ExpenseSummaryResponse) -> ExportedWorkbook:
                     )
                 )
                 row_number = detail.max_row
-                detail.cell(row_number, 1).number_format = "yyyy-mm-dd"
-                detail.cell(row_number, 10).number_format = CURRENCY_FORMAT
+                detail.cell(row_number, 2).number_format = "yyyy-mm-dd"
+                detail.cell(row_number, 11).number_format = CURRENCY_FORMAT
                 for cell in detail[row_number]:
                     cell.border = Border(bottom=thin)
 
     total_row = detail.max_row + 2
-    detail.cell(total_row, 9, "TOTAL INCLUDED EXPENSES")
-    detail.cell(total_row, 10, detail_total)
+    detail.cell(total_row, 10, "TOTAL INCLUDED EXPENSES")
+    detail.cell(total_row, 11, detail_total)
     for cell in detail[total_row]:
         cell.font = Font(bold=True, color=BLACK)
         cell.border = Border(top=medium, bottom=double)
-    detail.cell(total_row, 10).number_format = CURRENCY_FORMAT
+    detail.cell(total_row, 11).number_format = CURRENCY_FORMAT
     detail.freeze_panes = "A2"
-    detail.auto_filter.ref = f"A1:L{max(1, detail.max_row - 2)}"
+    detail.auto_filter.ref = f"A1:M{max(1, detail.max_row - 2)}"
     for column, width in {
-        "A": 13,
-        "B": 24,
-        "C": 42,
-        "D": 20,
-        "E": 28,
-        "F": 24,
-        "G": 12,
-        "H": 32,
-        "I": 30,
-        "J": 16,
-        "K": 20,
-        "L": 18,
+        "A": 16,
+        "B": 13,
+        "C": 24,
+        "D": 42,
+        "E": 20,
+        "F": 28,
+        "G": 24,
+        "H": 12,
+        "I": 32,
+        "J": 30,
+        "K": 16,
+        "L": 20,
+        "M": 18,
     }.items():
         detail.column_dimensions[column].width = width
 

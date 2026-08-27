@@ -2,5 +2,5 @@
 
 APP_NAME = "Personal Financial File Manager"
 APP_ID = "personal-finance-manager"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 BACKUP_FORMAT_VERSION = 1

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
@@ -24,7 +25,6 @@ from app.services.transaction_categorization.base import (
     CATEGORY_PRIORITY_INDEX,
     STATUS_NEEDS_REVIEW,
     STATUS_NOT_APPLICABLE,
-    STATUS_NOT_CATEGORIZED,
     is_category_eligible,
     is_valid_category_pair,
 )
@@ -49,6 +49,17 @@ class ReportingPeriod:
     end_date: date
     tax_year: int | None
     available_years: list[int]
+
+
+@dataclass(frozen=True)
+class SummaryReconciliation:
+    expected_transaction_ids: tuple[int, ...]
+    summary_transaction_ids: tuple[int, ...]
+    missing_transaction_ids: tuple[int, ...]
+    unexpected_transaction_ids: tuple[int, ...]
+    expected_total: Decimal
+    summary_total: Decimal
+    difference: Decimal
 
 
 def available_transaction_years(session: Session) -> list[int]:
@@ -135,8 +146,24 @@ def _transaction_response(transaction: Transaction, amount: Decimal) -> SummaryT
     )
 
 
-def _is_eligible(transaction: Transaction) -> bool:
-    return not transaction.excluded and is_category_eligible(transaction.transaction_type, transaction.direction)
+def is_expense_reporting_eligible(transaction: Transaction) -> bool:
+    if transaction.excluded:
+        return False
+    if is_category_eligible(transaction.transaction_type, transaction.direction):
+        return True
+
+    # A manual category correction is user-authoritative evidence that an
+    # unresolved outflow is an expense. Known non-expense types still follow
+    # their existing exclusion rules and cannot enter the report this way.
+    return bool(
+        transaction.transaction_type == "UNKNOWN"
+        and transaction.direction == "OUTFLOW"
+        and transaction.user_edited_category
+        and transaction.category_status == "USER_CONFIRMED"
+        and transaction.main_category
+        and transaction.subcategory
+        and is_valid_category_pair(transaction.main_category, transaction.subcategory)
+    )
 
 
 def _has_valid_report_category(transaction: Transaction) -> bool:
@@ -144,7 +171,50 @@ def _has_valid_report_category(transaction: Transaction) -> bool:
         transaction.main_category
         and transaction.subcategory
         and is_valid_category_pair(transaction.main_category, transaction.subcategory)
-        and transaction.category_status not in {STATUS_NOT_APPLICABLE, STATUS_NOT_CATEGORIZED}
+        and transaction.category_status != STATUS_NOT_APPLICABLE
+    )
+
+
+def contributing_summary_transactions(transactions: Iterable[Transaction]) -> list[Transaction]:
+    return [
+        transaction
+        for transaction in transactions
+        if transaction.include_in_expenses is True
+        and is_expense_reporting_eligible(transaction)
+        and _has_valid_report_category(transaction)
+    ]
+
+
+def summary_transaction_ids(summary: ExpenseSummaryResponse) -> tuple[int, ...]:
+    return tuple(
+        transaction.id
+        for group in summary.groups
+        for subcategory in group.subcategories
+        for transaction in subcategory.transactions
+    )
+
+
+def reconcile_expense_summary(
+    expected_transactions: Iterable[Transaction],
+    summary: ExpenseSummaryResponse,
+) -> SummaryReconciliation:
+    expected = list(expected_transactions)
+    expected_ids = tuple(sorted(transaction.id for transaction in expected))
+    actual_ids = tuple(sorted(summary_transaction_ids(summary)))
+    expected_id_set = set(expected_ids)
+    actual_id_set = set(actual_ids)
+    expected_total = _money(
+        sum((normalized_expense_amount(transaction) for transaction in expected), Decimal("0.00"))
+    )
+    actual_total = _money(Decimal(summary.grand_total))
+    return SummaryReconciliation(
+        expected_transaction_ids=expected_ids,
+        summary_transaction_ids=actual_ids,
+        missing_transaction_ids=tuple(sorted(expected_id_set - actual_id_set)),
+        unexpected_transaction_ids=tuple(sorted(actual_id_set - expected_id_set)),
+        expected_total=expected_total,
+        summary_total=actual_total,
+        difference=_money(actual_total - expected_total),
     )
 
 
@@ -183,13 +253,16 @@ def build_expense_summary(
     needs_review: list[SummaryTransactionResponse] = []
     included_eligible_count = 0
     not_applicable_count = 0
+    selected_non_expense_count = 0
     unselected_count = 0
 
     for transaction in transactions:
-        eligible = _is_eligible(transaction)
+        eligible = is_expense_reporting_eligible(transaction)
         if not eligible or transaction.category_status == STATUS_NOT_APPLICABLE:
             if not transaction.excluded:
                 not_applicable_count += 1
+                if transaction.include_in_expenses is True:
+                    selected_non_expense_count += 1
             continue
         if transaction.include_in_expenses is not True:
             unselected_count += 1
@@ -199,11 +272,14 @@ def build_expense_summary(
         amount = normalized_expense_amount(transaction)
         response = _transaction_response(transaction, amount)
         valid_category = _has_valid_report_category(transaction)
-        category_review_open = (
-            transaction.category_status == STATUS_NEEDS_REVIEW
-            and transaction.review_status != "REVIEWED"
+        unresolved_review = (
+            transaction.review_status != "REVIEWED"
+            and (
+                transaction.review_status == "NEEDS_REVIEW"
+                or transaction.category_status in {STATUS_NEEDS_REVIEW, "NOT_CATEGORIZED"}
+            )
         )
-        if category_review_open or not valid_category:
+        if unresolved_review or not valid_category:
             needs_review.append(response)
         if not valid_category:
             continue
@@ -268,6 +344,7 @@ def build_expense_summary(
             needs_review_count=len(needs_review),
             source_count=len(source_ids),
             not_applicable_count=not_applicable_count,
+            selected_non_expense_count=selected_non_expense_count,
             unselected_count=unselected_count,
             other_supplies_count=other_supplies_count,
         ),

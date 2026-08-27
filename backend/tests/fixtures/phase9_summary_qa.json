@@ -40,8 +40,9 @@
     "contributing_transaction_count": 32,
     "needs_review_count": 2,
     "source_count": 7,
-    "not_applicable_count": 2,
-    "unselected_count": 1,
+    "not_applicable_count": 8,
+    "selected_non_expense_count": 8,
+    "unselected_count": 8,
     "other_supplies_count": 1,
     "jan_1_to_3_total": "150.00"
   },
@@ -85,6 +86,19 @@
     {"key":"card-payment","institution":"CHASE","source_file":"chase-synthetic.pdf","date":"2026-06-01","name":"Amex Payment","detail":"AMEX PAYMENT SYNTHETIC","type":"CREDIT_CARD_PAYMENT","direction":"OUTFLOW","main":null,"subcategory":null,"amount":"1000.00","include":true,"category_status":"NOT_APPLICABLE"},
     {"key":"missing-category","institution":"TJX","source_file":"tjx-synthetic.pdf","date":"2026-07-01","name":"Missing Category","detail":"MISSING CATEGORY SYNTHETIC","type":"EXPENSE","direction":"OUTFLOW","main":null,"subcategory":null,"amount":"40.00","include":true,"category_status":"NOT_CATEGORIZED"},
     {"key":"refund-not-applicable","institution":"PAYPAL","source_file":"paypal-synthetic.pdf","date":"2026-08-01","name":"Merchant Refund","detail":"REFUND SYNTHETIC","type":"REFUND","direction":"INFLOW","main":null,"subcategory":null,"amount":"30.00","include":true,"category_status":"NOT_APPLICABLE"},
+    {"key":"unselected-office-chase","institution":"CHASE","source_file":"chase-synthetic.pdf","date":"2026-08-02","name":"Unselected Office Chase","detail":"UNSELECTED OFFICE CHASE SYNTHETIC","type":"EXPENSE","direction":"OUTFLOW","main":"PROFIT_LOSS_BUSINESS","subcategory":"BUSINESS_OFFICE_EXPENSE","amount":"31.00","include":false,"category_status":"CATEGORIZED"},
+    {"key":"unselected-travel-amex","institution":"AMEX","source_file":"amex-synthetic.pdf","date":"2026-08-03","name":"Unselected Travel Amex","detail":"UNSELECTED TRAVEL AMEX SYNTHETIC","type":"EXPENSE","direction":"OUTFLOW","main":"PROFIT_LOSS_BUSINESS","subcategory":"BUSINESS_TRAVEL","amount":"32.00","include":false,"category_status":"CATEGORIZED"},
+    {"key":"unselected-materials-capital-one","institution":"CAPITAL_ONE","source_file":"capital-one-synthetic.pdf","date":"2026-08-04","name":"Unselected Materials Capital One","detail":"UNSELECTED MATERIALS CAPITAL ONE SYNTHETIC","type":"EXPENSE","direction":"OUTFLOW","main":"PROFIT_LOSS_BUSINESS","subcategory":"BUSINESS_MATERIALS","amount":"33.00","include":false,"category_status":"CATEGORIZED"},
+    {"key":"unselected-parking-paypal","institution":"PAYPAL","source_file":"paypal-synthetic.pdf","date":"2026-08-05","name":"Unselected Parking PayPal","detail":"UNSELECTED PARKING PAYPAL SYNTHETIC","type":"EXPENSE","direction":"OUTFLOW","main":"AUTO_EXPENSE","subcategory":"AUTO_PARKING","amount":"34.00","include":false,"category_status":"CATEGORIZED"},
+    {"key":"unselected-medical-tjx","institution":"TJX","source_file":"tjx-synthetic.pdf","date":"2026-08-06","name":"Unselected Medical TJX","detail":"UNSELECTED MEDICAL TJX SYNTHETIC","type":"EXPENSE","direction":"OUTFLOW","main":"PROFIT_LOSS_BUSINESS","subcategory":"BUSINESS_MEDICAL","amount":"35.00","include":false,"category_status":"CATEGORIZED"},
+    {"key":"unselected-education-amazon","institution":"AMAZON","source_file":"amazon-synthetic.pdf","date":"2026-08-07","name":"Unselected Education Amazon","detail":"UNSELECTED EDUCATION AMAZON SYNTHETIC","type":"EXPENSE","direction":"OUTFLOW","main":"PROFIT_LOSS_BUSINESS","subcategory":"BUSINESS_EDUCATION_LEARNING","amount":"36.00","include":false,"category_status":"CATEGORIZED"},
+    {"key":"unselected-utilities-chase","institution":"CHASE","source_file":"chase-synthetic.pdf","date":"2026-08-08","name":"Unselected Utilities Chase","detail":"UNSELECTED UTILITIES CHASE SYNTHETIC","type":"EXPENSE","direction":"OUTFLOW","main":"BUSINESS_USE_OF_HOME","subcategory":"HOME_UTILITIES","amount":"37.00","include":false,"category_status":"CATEGORIZED"},
+    {"key":"selected-transfer-amex","institution":"AMEX","source_file":"amex-synthetic.pdf","date":"2026-08-09","name":"Selected Transfer Amex","detail":"SELECTED TRANSFER AMEX SYNTHETIC","type":"TRANSFER","direction":"OUTFLOW","main":null,"subcategory":null,"amount":"38.00","include":true,"category_status":"NOT_APPLICABLE"},
+    {"key":"selected-income-capital-one","institution":"CAPITAL_ONE","source_file":"capital-one-synthetic.pdf","date":"2026-08-10","name":"Selected Income Capital One","detail":"SELECTED INCOME CAPITAL ONE SYNTHETIC","type":"INCOME","direction":"INFLOW","main":null,"subcategory":null,"amount":"39.00","include":true,"category_status":"NOT_APPLICABLE"},
+    {"key":"selected-payment-paypal","institution":"PAYPAL","source_file":"paypal-synthetic.pdf","date":"2026-08-11","name":"Selected Payment PayPal","detail":"SELECTED PAYMENT PAYPAL SYNTHETIC","type":"CREDIT_CARD_PAYMENT","direction":"OUTFLOW","main":null,"subcategory":null,"amount":"41.00","include":true,"category_status":"NOT_APPLICABLE"},
+    {"key":"selected-refund-tjx","institution":"TJX","source_file":"tjx-synthetic.pdf","date":"2026-08-12","name":"Selected Refund TJX","detail":"SELECTED REFUND TJX SYNTHETIC","type":"REFUND","direction":"INFLOW","main":null,"subcategory":null,"amount":"42.00","include":true,"category_status":"NOT_APPLICABLE"},
+    {"key":"selected-cash-amazon","institution":"AMAZON","source_file":"amazon-synthetic.pdf","date":"2026-08-13","name":"Selected Cash Amazon","detail":"SELECTED CASH AMAZON SYNTHETIC","type":"ATM_CASH_WITHDRAWAL","direction":"OUTFLOW","main":null,"subcategory":null,"amount":"43.00","include":true,"category_status":"NOT_APPLICABLE"},
+    {"key":"selected-check-chase","institution":"CHASE","source_file":"chase-synthetic.pdf","date":"2026-08-14","name":"Selected Check Chase","detail":"SELECTED CHECK CHASE SYNTHETIC","type":"CHECK","direction":"OUTFLOW","main":null,"subcategory":null,"amount":"44.00","include":true,"category_status":"NOT_APPLICABLE"},
     {"key":"prior-year-gas","institution":"CHASE","source_file":"chase-synthetic.pdf","date":"2025-12-31","name":"Prior Year Fuel","detail":"PRIOR YEAR GAS SYNTHETIC","type":"EXPENSE","direction":"OUTFLOW","main":"AUTO_EXPENSE","subcategory":"AUTO_GAS","amount":"200.00","include":true,"category_status":"CATEGORIZED"}
   ]
 }

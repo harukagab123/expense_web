@@ -58,6 +58,7 @@ class SummaryMetricsResponse(BaseModel):
     needs_review_count: int
     source_count: int
     not_applicable_count: int
+    selected_non_expense_count: int
     unselected_count: int
     other_supplies_count: int
 

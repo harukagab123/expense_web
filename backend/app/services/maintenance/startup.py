@@ -10,7 +10,8 @@ import sys
 
 from app.core.config import Settings, get_settings
 from app.core.resources import SOURCE_ROOT
-from app.services.maintenance.migrations import migrate_database
+from app.services.maintenance.backups import BackupError, create_backup
+from app.services.maintenance.migrations import MigrationError, migrate_database
 from app.version import APP_VERSION
 
 
@@ -18,12 +19,54 @@ def initialize_directories(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     for path in (settings.data_dir, settings.storage_dir, settings.backups_dir, settings.logs_dir, settings.config_dir):
         path.mkdir(parents=True, exist_ok=True)
-    metadata = settings.config_dir / "settings.json"
-    if not metadata.exists():
-        metadata.write_text(
-            json.dumps({"app_version": APP_VERSION, "automatic_backup_retention": settings.automatic_backup_retention}, indent=2),
-            encoding="utf-8",
+
+
+def _settings_metadata_path(settings: Settings) -> Path:
+    return settings.config_dir / "settings.json"
+
+
+def _read_installed_version(settings: Settings) -> str | None:
+    metadata = _settings_metadata_path(settings)
+    if not metadata.is_file():
+        return None
+    try:
+        payload = json.loads(metadata.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = payload.get("app_version")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _write_settings_metadata(settings: Settings) -> None:
+    _settings_metadata_path(settings).write_text(
+        json.dumps(
+            {
+                "app_version": APP_VERSION,
+                "automatic_backup_retention": settings.automatic_backup_retention,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _backup_before_version_update(settings: Settings, installed_version: str | None) -> Path | None:
+    database_path = settings.database_path
+    if (
+        installed_version is None
+        or installed_version == APP_VERSION
+        or database_path is None
+        or not database_path.exists()
+    ):
+        return None
+    try:
+        return create_backup(
+            kind="automatic",
+            label=f"pre-update-{installed_version}-to-{APP_VERSION}",
+            settings=settings,
         )
+    except BackupError as exc:
+        raise MigrationError("Update stopped because its safety backup failed.") from exc
 
 
 def _legacy_roots() -> list[Path]:
@@ -95,5 +138,9 @@ def migrate_legacy_data(settings: Settings | None = None) -> bool:
 def prepare_application(settings: Settings | None = None) -> Path | None:
     settings = settings or get_settings()
     initialize_directories(settings)
+    installed_version = _read_installed_version(settings)
     migrate_legacy_data(settings)
-    return migrate_database(settings=settings)
+    update_backup = _backup_before_version_update(settings, installed_version)
+    migration_backup = migrate_database(settings=settings)
+    _write_settings_metadata(settings)
+    return migration_backup or update_backup
