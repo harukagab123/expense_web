@@ -15,6 +15,8 @@ import {
   deleteStoredFile,
   excludeTransaction,
   expenseSummaryExportUrl,
+  createMaintenanceBackup,
+  exportDiagnosticBundle,
   fileDownloadUrl,
   filePreviewUrl,
   getAttention,
@@ -22,11 +24,14 @@ import {
   getCategoryCatalog,
   getCategoryRules,
   getExpenseSummary,
+  getMaintenanceStatus,
   getFileManagerTree,
   getStatementForFile,
   getStatementTerms,
   getTransactionsForStatement,
   searchFileManager,
+  openBackupFolder,
+  restoreMaintenanceBackup,
   updateFolder,
   updateCategoryRule,
   updateStatementForFile,
@@ -70,6 +75,7 @@ import type {
   SummaryGroup,
   SummarySubcategory,
   SummaryTransaction,
+  MaintenanceStatus,
 } from "./types/fileManager";
 
 type MoveDialogState =
@@ -154,7 +160,7 @@ type CategoryFilter =
 
 type InclusionFilter = "all" | "included" | "excluded" | "needs_review" | "reviewed";
 
-type AppView = "files" | "summary";
+type AppView = "files" | "summary" | "maintenance";
 type SummaryMode = "tax_year" | "custom";
 type SummarySortBy = "date" | "name" | "amount" | "source";
 type SummaryDrillDown =
@@ -1585,6 +1591,17 @@ export default function App() {
             >
               Summary
             </button>
+            <button
+              aria-current={activeView === "maintenance" ? "page" : undefined}
+              className={activeView === "maintenance" ? "primary-navigation--active" : ""}
+              onClick={() => {
+                setAttentionFocusTarget(null);
+                setActiveView("maintenance");
+              }}
+              type="button"
+            >
+              Maintenance
+            </button>
             <div className="attention-menu" ref={attentionRef}>
               <NotificationBell
                 attention={attention}
@@ -1621,6 +1638,11 @@ export default function App() {
           <span>
             <span className="breadcrumb-separator">/</span>
             <button aria-current="page" onClick={() => setActiveView("summary")} type="button">Summary</button>
+          </span>
+        ) : activeView === "maintenance" ? (
+          <span>
+            <span className="breadcrumb-separator">/</span>
+            <button aria-current="page" onClick={() => setActiveView("maintenance")} type="button">Maintenance</button>
           </span>
         ) : breadcrumbs.map((folder) => (
           <span key={folder.id}>
@@ -1760,9 +1782,11 @@ export default function App() {
           ) : null}
         </aside>
 
-        <section className="details-pane" aria-label={activeView === "summary" ? "Expense summary" : "Selected item details"}>
+        <section className="details-pane" aria-label={activeView === "summary" ? "Expense summary" : activeView === "maintenance" ? "Maintenance" : "Selected item details"}>
           {activeView === "summary" ? (
             <SummaryPage onOpenTransaction={handleOpenSummaryTransaction} />
+          ) : activeView === "maintenance" ? (
+            <MaintenancePage />
           ) : (
             <>
           <div className="pane-header">
@@ -4329,6 +4353,126 @@ function LearnedRulesDialog({
           </form>
         ) : null}
       </section>
+    </div>
+  );
+}
+
+function formatStorageSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function MaintenancePage() {
+  const [status, setStatus] = useState<MaintenanceStatus | null>(null);
+  const [message, setMessage] = useState("Loading maintenance status...");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const restoreInput = useRef<HTMLInputElement>(null);
+
+  const loadStatus = useCallback(async (integrity = false) => {
+    setError("");
+    try {
+      setStatus(await getMaintenanceStatus(integrity));
+      setMessage(integrity ? "Full database health check completed." : "Maintenance status is current.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Maintenance status could not be loaded.");
+    }
+  }, []);
+
+  useEffect(() => { void loadStatus(); }, [loadStatus]);
+
+  async function run(action: () => Promise<void>, success: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+      setMessage(success);
+      await loadStatus();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Maintenance action failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRestore(file: File) {
+    if (!window.confirm(
+      "Restore this backup?\n\nCurrent data will be replaced by the selected backup. A safety backup of the current state will be created first.",
+    )) return;
+    await run(async () => {
+      await restoreMaintenanceBackup(file);
+      window.setTimeout(() => window.location.reload(), 500);
+    }, "Backup restored. Reloading the application...");
+  }
+
+  return (
+    <div className="maintenance-page">
+      <header className="maintenance-header">
+        <div>
+          <p>Settings</p>
+          <h2>Maintenance</h2>
+          <span>Protect your local data and check application health.</span>
+        </div>
+        <span className={`maintenance-status maintenance-status--${status?.application.status ?? "attention"}`}>
+          {status?.application.status === "healthy" ? "Healthy" : "Needs Attention"}
+        </span>
+      </header>
+
+      <section className="maintenance-card maintenance-application">
+        <h3>Application</h3>
+        <dl>
+          <div><dt>Version</dt><dd>{status?.application.version ?? "—"}</dd></div>
+          <div><dt>Database</dt><dd>{status?.database.status === "healthy" ? "Healthy" : status?.database.status ?? "Checking"}</dd></div>
+          <div><dt>Storage</dt><dd>{status?.storage.status === "healthy" ? "Healthy" : status?.storage.status ?? "Checking"}</dd></div>
+        </dl>
+        <button disabled={busy} onClick={() => void loadStatus(true)} type="button">Run Health Check</button>
+      </section>
+
+      <section className="maintenance-card">
+        <h3>Backup</h3>
+        <p>
+          Last backup: {status?.backup.last_successful_at
+            ? new Date(status.backup.last_successful_at).toLocaleString()
+            : "No backup created yet"}
+        </p>
+        <div className="maintenance-actions">
+          <button disabled={busy} onClick={() => void run(createMaintenanceBackup, "Backup created and downloaded.")} type="button">Create Backup</button>
+          <button disabled={busy} onClick={() => restoreInput.current?.click()} type="button">Restore Backup</button>
+          <button disabled={busy} onClick={() => void run(openBackupFolder, "Backup folder opened.")} type="button">Open Backup Folder</button>
+        </div>
+        <input
+          accept=".zip,application/zip"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void handleRestore(file);
+            event.currentTarget.value = "";
+          }}
+          ref={restoreInput}
+          type="file"
+        />
+      </section>
+
+      <section className="maintenance-card">
+        <h3>Diagnostics</h3>
+        <p>Creates a privacy-safe report without your database, statements, transactions, account data, or exports.</p>
+        <button disabled={busy} onClick={() => void run(exportDiagnosticBundle, "Diagnostic bundle created and downloaded.")} type="button">Export Diagnostic Bundle</button>
+      </section>
+
+      <details className="maintenance-card maintenance-advanced">
+        <summary>Advanced</summary>
+        <dl>
+          <div><dt>Schema revision</dt><dd>{status?.database.schema_revision ?? "Not initialized"}</dd></div>
+          <div><dt>Retained files</dt><dd>{status?.storage.retained_file_count ?? 0}</dd></div>
+          <div><dt>Storage size</dt><dd>{formatStorageSize(status?.storage.size_bytes ?? 0)}</dd></div>
+          <div><dt>Data directory</dt><dd>{status?.paths.data ?? "—"}</dd></div>
+          <div><dt>Log directory</dt><dd>{status?.paths.logs ?? "—"}</dd></div>
+        </dl>
+      </details>
+
+      <p className={`maintenance-message ${error ? "maintenance-message--error" : ""}`} role="status">
+        {error || (busy ? "Working..." : message)}
+      </p>
     </div>
   );
 }

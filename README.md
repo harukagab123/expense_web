@@ -3,7 +3,7 @@
 Personal Financial File Manager is a single-user personal website for organizing personal financial files, previewing stored documents, and later analyzing bank and credit-card statements.
 
 Current Development Phase:
-Phase 9 - Final Expense Summary, Drill-Down, and Excel Export
+Phase 10 - Packaging, Backup, Updates, and Maintenance
 
 This application is intentionally single-user and does not include login/authentication.
 
@@ -15,7 +15,19 @@ This application is intentionally single-user and does not include login/authent
 - Alembic database migrations
 - Private local file storage under `storage/files/`
 - Saved transaction analysis, categorization, selection, review, and reporting
-- Local Excel generation with `@oai/artifact-tool`
+- Local Excel generation with the bundled Python runtime
+
+## Packaged Windows Application
+
+The production build is a single windowless Windows executable. It serves prebuilt frontend assets from FastAPI at a local-only `127.0.0.1` URL, opens the browser automatically, prevents duplicate instances, chooses a safe alternate port when required, and performs startup migrations before serving the UI. The packaged application does not use Vite, reload mode, a separately installed Python runtime, or Node.js.
+
+Writable production state is kept under `%LOCALAPPDATA%\PersonalFinanceManager` and is never installed beside replaceable application files. See [the user guide](docs/USER_GUIDE.md) and [release guide](docs/RELEASE_GUIDE.md).
+
+Build release artifacts from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1
+```
 
 ## Setup
 

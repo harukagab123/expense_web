@@ -8,6 +8,9 @@ def temp_database_url(tmp_path, monkeypatch) -> Iterator[str]:
     database_url = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("STORAGE_DIR", str(tmp_path / "storage"))
+    monkeypatch.setenv("BACKUPS_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("MAX_UPLOAD_BYTES", str(1024 * 1024))
 
     from app.core.config import get_settings

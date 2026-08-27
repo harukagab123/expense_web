@@ -1,71 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 import json
-import os
 from pathlib import Path
-import shutil
-import subprocess
-import tempfile
 
-from fastapi import HTTPException
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Border, Font, PatternFill, Side
 
 from app.schemas.summary import ExpenseSummaryResponse
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
-BUILDER_PATH = PROJECT_ROOT / "backend" / "scripts" / "summary_workbook.mjs"
-CODEX_ARTIFACT_NODE_MODULES = (
-    Path.home()
-    / ".cache"
-    / "codex-runtimes"
-    / "codex-primary-runtime"
-    / "dependencies"
-    / "node"
-    / "node_modules"
-)
+
+BLACK = "000000"
+WHITE = "FFFFFF"
+CURRENCY_FORMAT = '$#,##0.00;($#,##0.00);-'
 
 
 @dataclass(frozen=True)
 class ExportedWorkbook:
     content: bytes
     filename: str
-
-
-def _node_modules_path() -> Path:
-    configured = os.getenv("SUMMARY_EXPORT_NODE_MODULES", "").strip()
-    candidates = [Path(configured)] if configured else []
-    candidates.append(CODEX_ARTIFACT_NODE_MODULES)
-    for candidate in candidates:
-        if (candidate / "@oai" / "artifact-tool").is_dir():
-            return candidate.resolve()
-    raise HTTPException(
-        status_code=503,
-        detail="Excel export runtime is unavailable. Configure SUMMARY_EXPORT_NODE_MODULES.",
-    )
-
-
-def _node_executable() -> str:
-    configured = os.getenv("SUMMARY_EXPORT_NODE", "").strip()
-    executable = configured or shutil.which("node")
-    if not executable:
-        raise HTTPException(status_code=503, detail="Excel export requires a local Node.js runtime.")
-    return executable
-
-
-def _link_node_modules(target: Path, source: Path) -> None:
-    try:
-        target.symlink_to(source, target_is_directory=True)
-    except OSError:
-        if os.name != "nt":
-            raise
-        completed = subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(target), str(source)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise OSError(completed.stderr or completed.stdout or "Could not create export runtime junction.")
 
 
 def _safe_filename(summary: ExpenseSummaryResponse) -> str:
@@ -77,55 +31,107 @@ def _safe_filename(summary: ExpenseSummaryResponse) -> str:
 
 
 def export_expense_summary(summary: ExpenseSummaryResponse) -> ExportedWorkbook:
-    node_modules = _node_modules_path()
-    node = _node_executable()
-    with tempfile.TemporaryDirectory(prefix="expense-summary-") as temporary_directory:
-        workdir = Path(temporary_directory)
-        _link_node_modules(workdir / "node_modules", node_modules)
-        script_path = workdir / BUILDER_PATH.name
-        shutil.copy2(BUILDER_PATH, script_path)
-        input_path = workdir / "summary.json"
-        output_path = workdir / "summary.xlsx"
-        input_path.write_text(summary.json(), encoding="utf-8")
-        completed = subprocess.run(
-            [node, str(script_path), "build", str(input_path), str(output_path)],
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        if completed.returncode != 0 or not output_path.is_file():
-            raise HTTPException(status_code=500, detail="Excel export could not be generated.")
-        return ExportedWorkbook(content=output_path.read_bytes(), filename=_safe_filename(summary))
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Summary"
+    sheet.sheet_view.showGridLines = False
+    thin = Side(style="thin", color=BLACK)
+    medium = Side(style="medium", color=BLACK)
+    double = Side(style="double", color=BLACK)
+    black_fill = PatternFill("solid", fgColor=BLACK)
+
+    sheet.merge_cells("A1:B1")
+    sheet["A1"] = f"{summary.period.label} EXPENSE SUMMARY"
+    sheet["A1"].fill = black_fill
+    sheet["A1"].font = Font(bold=True, color=WHITE, size=18)
+    sheet.row_dimensions[1].height = 34
+    sheet.merge_cells("A2:B2")
+    sheet["A2"] = f"Reporting period: {summary.period.start_date} through {summary.period.end_date}"
+    sheet["A2"].font = Font(italic=True, color=BLACK)
+    sheet["A2"].border = Border(bottom=thin)
+
+    sheet["A4"] = "TOTAL INCLUDED EXPENSES"
+    sheet["B4"] = float(summary.grand_total)
+    for cell in sheet[4]:
+        cell.font = Font(bold=True, color=BLACK, size=13)
+        cell.border = Border(top=medium, bottom=double)
+    sheet["B4"].number_format = CURRENCY_FORMAT
+
+    row = 7
+    for group in summary.groups:
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        sheet.cell(row, 1, group.label)
+        sheet.cell(row, 1).fill = black_fill
+        sheet.cell(row, 1).font = Font(bold=True, color=WHITE)
+        sheet.row_dimensions[row].height = 24
+        row += 1
+        sheet.cell(row, 1, "Subcategory")
+        sheet.cell(row, 2, "Amount")
+        for cell in sheet[row]:
+            cell.font = Font(bold=True, color=BLACK)
+            cell.border = Border(bottom=medium)
+        row += 1
+        for subcategory in group.subcategories:
+            sheet.cell(row, 1, subcategory.label)
+            sheet.cell(row, 2, float(subcategory.total))
+            sheet.cell(row, 2).number_format = CURRENCY_FORMAT
+            for cell in sheet[row]:
+                cell.border = Border(bottom=thin)
+            row += 1
+        sheet.cell(row, 1, f"TOTAL {group.label}")
+        sheet.cell(row, 2, float(group.total))
+        for cell in sheet[row]:
+            cell.font = Font(bold=True, color=BLACK)
+            cell.border = Border(top=medium, bottom=double)
+        sheet.cell(row, 2).number_format = CURRENCY_FORMAT
+        row += 2
+
+    sheet.cell(row, 1, "TOTAL INCLUDED EXPENSES")
+    sheet.cell(row, 2, float(summary.grand_total))
+    for cell in sheet[row]:
+        cell.fill = black_fill
+        cell.font = Font(bold=True, color=WHITE, size=13)
+        cell.border = Border(top=medium, bottom=double)
+    sheet.cell(row, 2).number_format = CURRENCY_FORMAT
+    sheet.column_dimensions["A"].width = 44
+    sheet.column_dimensions["B"].width = 20
+    sheet.freeze_panes = "A3"
+
+    output = BytesIO()
+    workbook.save(output)
+    return ExportedWorkbook(content=output.getvalue(), filename=_safe_filename(summary))
 
 
-def inspect_expense_summary_workbook(
-    content: bytes,
-    *,
-    summary_preview_path: Path | None = None,
-) -> dict:
-    node_modules = _node_modules_path()
-    node = _node_executable()
-    with tempfile.TemporaryDirectory(prefix="expense-summary-inspect-") as temporary_directory:
-        workdir = Path(temporary_directory)
-        _link_node_modules(workdir / "node_modules", node_modules)
-        script_path = workdir / BUILDER_PATH.name
-        shutil.copy2(BUILDER_PATH, script_path)
-        input_path = workdir / "summary.xlsx"
-        input_path.write_bytes(content)
-        command = [node, str(script_path), "inspect", str(input_path)]
-        if summary_preview_path is not None:
-            summary_preview_path.parent.mkdir(parents=True, exist_ok=True)
-            command.append(str(summary_preview_path))
-        completed = subprocess.run(
-            command,
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
+def inspect_expense_summary_workbook(content: bytes, *, summary_preview_path: Path | None = None) -> dict:
+    workbook = load_workbook(BytesIO(content), data_only=False)
+    sheet = workbook["Summary"]
+    values = [[cell.value for cell in row] for row in sheet.iter_rows()]
+    formulas = [
+        [cell.value if isinstance(cell.value, str) and cell.value.startswith("=") else None for cell in row]
+        for row in sheet.iter_rows()
+    ]
+    formula_errors = [
+        value for row_values in values for value in row_values
+        if isinstance(value, str) and value.startswith("#")
+    ]
+    styles = []
+    for row_cells in sheet.iter_rows():
+        for cell in row_cells:
+            for color in (cell.font.color, cell.fill.fgColor):
+                rgb = getattr(color, "rgb", None)
+                if rgb:
+                    styles.append({"value": str(rgb)[-6:]})
+    if summary_preview_path is not None:
+        summary_preview_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_preview_path.write_text(
+            "Workbook preview rendering is not part of the packaged runtime.",
+            encoding="utf-8",
         )
-        if completed.returncode != 0:
-            raise RuntimeError(completed.stderr or completed.stdout or "Workbook validation failed.")
-        return json.loads(completed.stdout)
+    return {
+        "sheets": workbook.sheetnames,
+        "summaryValues": values,
+        "summaryFormulas": formulas,
+        "formulaErrors": formula_errors,
+        "computedStyles": "\n".join(json.dumps(style) for style in styles),
+        "sheetInspection": "Summary",
+    }

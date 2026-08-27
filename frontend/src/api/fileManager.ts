@@ -37,6 +37,8 @@ import type {
   StoredFile,
   UploadBatchResponse,
   ExpenseSummary,
+  MaintenanceStatus,
+  RestoreResponse,
 } from "../types/fileManager";
 
 type RequestOptions = RequestInit & {
@@ -403,4 +405,45 @@ export async function getExpenseSummary(query: SummaryQuery = {}): Promise<Expen
 
 export function expenseSummaryExportUrl(query: SummaryQuery): string {
   return `${apiConfig.baseUrl}/api/summary/export.xlsx${summaryQueryString(query)}`;
+}
+
+export async function getMaintenanceStatus(integrity = false): Promise<MaintenanceStatus> {
+  return requestJson<MaintenanceStatus>(`/api/maintenance/status?integrity=${integrity}`);
+}
+
+async function downloadPost(path: string): Promise<void> {
+  const response = await fetch(`${apiConfig.baseUrl}${path}`, { method: "POST" });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new ApiRequestError(response.status, formatApiError(payload), payload);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = match?.[1] ?? "download.zip";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+}
+
+export async function createMaintenanceBackup(): Promise<void> {
+  return downloadPost("/api/maintenance/backups");
+}
+
+export async function exportDiagnosticBundle(): Promise<void> {
+  return downloadPost("/api/maintenance/diagnostics");
+}
+
+export async function restoreMaintenanceBackup(file: File): Promise<RestoreResponse> {
+  const body = new FormData();
+  body.append("backup", file);
+  body.append("confirm", "true");
+  return requestJson<RestoreResponse>("/api/maintenance/restore", { method: "POST", body });
+}
+
+export async function openBackupFolder(): Promise<void> {
+  await requestJson("/api/maintenance/open-backup-folder", { method: "POST" });
 }

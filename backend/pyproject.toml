@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "personal-financial-file-manager-backend"
-version = "0.1.0"
+dynamic = ["version"]
 description = "FastAPI backend for a single-user personal financial file manager."
 requires-python = ">=3.11"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
     "pypdf>=4.0,<6.0",
     "python-multipart>=0.0.9,<1.0",
     "python-dotenv>=1.0",
+    "openpyxl>=3.1,<4.0",
     "sqlalchemy>=2.0,<3.0",
     "uvicorn>=0.23,<0.30",
 ]
@@ -22,10 +23,14 @@ dependencies = [
 dev = [
     "httpx>=0.24,<0.25",
     "pytest>=8.0,<10.0",
+    "pyinstaller>=6.0,<7.0",
 ]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "app.version.APP_VERSION"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

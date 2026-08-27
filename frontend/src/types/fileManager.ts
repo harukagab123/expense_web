@@ -525,3 +525,18 @@ export type AttentionCountResponse = {
   review_total: number;
   ready_for_summary: boolean;
 };
+
+export type MaintenanceStatus = {
+  application: { name: string; version: string; status: "healthy" | "attention" };
+  database: { status: string; schema_revision: string | null };
+  storage: { status: string; retained_file_count: number; size_bytes: number };
+  backup: { last_successful_at: string | null; count: number };
+  paths: { data: string; storage: string; backups: string; logs: string };
+};
+
+export type RestoreResponse = {
+  status: "restored";
+  safety_backup_created: boolean;
+  safety_backup_name: string;
+  restored_app_version: string | null;
+};

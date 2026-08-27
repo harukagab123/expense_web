@@ -32,6 +32,10 @@ data/*
 storage/*
 !storage/.gitkeep
 outputs/
+backups/
+config/
+diagnostics/
+*.zip
 
 # Logs
 logs/

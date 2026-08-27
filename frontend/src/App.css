@@ -1882,6 +1882,142 @@ button.attention-field--soft {
   font-weight: 650;
 }
 
+.maintenance-page {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+}
+
+.maintenance-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #d9e2ec;
+}
+
+.maintenance-header p,
+.maintenance-header h2,
+.maintenance-header span,
+.maintenance-card h3,
+.maintenance-card p {
+  margin: 0;
+}
+
+.maintenance-header p {
+  color: #627d98;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.maintenance-header h2 {
+  margin: 4px 0;
+  color: #102a43;
+}
+
+.maintenance-header span {
+  color: #52606d;
+}
+
+.maintenance-status {
+  padding: 7px 11px;
+  border: 1px solid #d9e2ec;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.maintenance-status--healthy {
+  border-color: #83c5a1;
+  color: #17643b !important;
+  background: #ecfdf3;
+}
+
+.maintenance-status--attention {
+  border-color: #f3c57b;
+  color: #8a4b08 !important;
+  background: #fff8e8;
+}
+
+.maintenance-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid #d9e2ec;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.maintenance-card h3,
+.maintenance-advanced summary {
+  color: #102a43;
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.maintenance-card p {
+  color: #52606d;
+  line-height: 1.5;
+}
+
+.maintenance-card dl {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.maintenance-card dl div {
+  display: grid;
+  grid-template-columns: minmax(130px, 190px) minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid #eef1f4;
+}
+
+.maintenance-card dt {
+  color: #627d98;
+  font-weight: 700;
+}
+
+.maintenance-card dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: #243b53;
+  font-weight: 750;
+}
+
+.maintenance-card > button,
+.maintenance-actions {
+  justify-self: start;
+}
+
+.maintenance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.maintenance-advanced summary {
+  cursor: pointer;
+}
+
+.maintenance-message {
+  margin: 0;
+  padding: 11px 13px;
+  border-radius: 8px;
+  color: #334e68;
+  background: #f0f4f8;
+  font-weight: 700;
+}
+
+.maintenance-message--error {
+  color: #8a1f11;
+  background: #fff1f0;
+}
+
 @media (max-width: 860px) {
   .top-bar__inner,
   .manager-toolbar,
