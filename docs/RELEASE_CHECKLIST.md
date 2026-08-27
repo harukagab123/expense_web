@@ -1,5 +1,7 @@
 # Release Checklist
 
+The completed `1.0.0` evidence is recorded in [Phase 11 Release Readiness](PHASE11_RELEASE_READINESS.md). Reset these boxes when preparing a later version.
+
 - [ ] Authoritative version updated
 - [ ] Migrations reviewed
 - [ ] Backend tests pass

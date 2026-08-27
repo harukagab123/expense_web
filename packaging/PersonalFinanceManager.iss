@@ -33,10 +33,14 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Run]
 Filename: "{app}\PersonalFinanceManager.exe"; Description: "Launch Personal Finance Manager"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM PersonalFinanceManager.exe"; Flags: runhidden waituntilterminated; RunOnceId: "ClosePersonalFinanceManager"
+
 [Code]
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
+  CloseResultCode: Integer;
   ExistingExe: String;
 begin
   Result := '';
@@ -45,5 +49,20 @@ begin
   begin
     if not Exec(ExistingExe, '--prepare-update {#MyAppVersion}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
       Result := 'Update stopped because the required safety backup could not be created. Your installed application and data were not changed.';
+    if Result = '' then
+    begin
+      { The windowless launcher has no top-level window for Restart Manager to
+        close. Stop only this product's explicitly named processes, and only
+        after the installed version created and validated its safety backup. }
+      Exec(
+        ExpandConstant('{sys}\taskkill.exe'),
+        '/F /IM PersonalFinanceManager.exe',
+        '',
+        SW_HIDE,
+        ewWaitUntilTerminated,
+        CloseResultCode
+      );
+      Sleep(500);
+    end;
   end;
 end;

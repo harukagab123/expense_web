@@ -3,7 +3,7 @@
 Personal Financial File Manager is a single-user personal website for organizing personal financial files, previewing stored documents, and later analyzing bank and credit-card statements.
 
 Current Development Phase:
-Phase 10 - Packaging, Backup, Updates, and Maintenance
+Phase 11 - Release Candidate Validated
 
 This application is intentionally single-user and does not include login/authentication.
 
@@ -64,8 +64,6 @@ Key values:
 - `STORAGE_DIR` may be left blank to use private local storage at `storage/files/`.
 - `MAX_UPLOAD_BYTES` controls the per-file upload size limit. The default is 25 MB.
 - `VITE_API_URL` controls the backend API base URL used by the frontend. The frontend defaults to `http://127.0.0.1:8000`; create `frontend/.env` from `frontend/.env.example` only if you need to override it.
-- `SUMMARY_EXPORT_NODE` may point to the local Node.js executable used for Excel exports; when blank, the backend uses `node` from `PATH`.
-- `SUMMARY_EXPORT_NODE_MODULES` may point to the local `node_modules` directory containing `@oai/artifact-tool`, which is required for Excel export generation.
 
 Do not commit `.env`, database files, uploaded statements, or other personal financial data.
 
@@ -215,4 +213,4 @@ On macOS/Linux, after setup:
 
 ## Expense Summary
 
-The Summary page combines authoritative saved transaction records across analyzed statements. It supports tax-year and inclusive custom-date reporting, the approved fixed category order, Needs Review navigation, source-row traceability, retained historical transactions, and a minimal black-and-white Excel Summary export. The workbook contains no transaction-detail worksheet. Only selected, eligible transactions with valid saved categories contribute to totals; the reporting layer never categorizes transactions or resets selections.
+The Summary page combines authoritative saved transaction records across analyzed statements. It supports tax-year and inclusive custom-date reporting, the approved fixed category order, Needs Review navigation, source-row traceability, retained historical transactions, and a minimal black-and-white Excel export with `Summary` and `Transaction Detail` worksheets. Only selected, eligible transactions with valid saved categories contribute to totals; the reporting layer never categorizes transactions or resets selections.

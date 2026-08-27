@@ -97,6 +97,81 @@ def export_expense_summary(summary: ExpenseSummaryResponse) -> ExportedWorkbook:
     sheet.column_dimensions["B"].width = 20
     sheet.freeze_panes = "A3"
 
+    detail = workbook.create_sheet("Transaction Detail")
+    detail.sheet_view.showGridLines = False
+    headers = (
+        "Date",
+        "Name",
+        "Transaction Detail",
+        "Institution",
+        "Source File",
+        "Type",
+        "Direction",
+        "Main Category",
+        "Subcategory",
+        "Amount",
+        "Category Status",
+        "Review Status",
+    )
+    detail.append(headers)
+    for cell in detail[1]:
+        cell.fill = black_fill
+        cell.font = Font(bold=True, color=WHITE)
+        cell.border = Border(bottom=medium)
+
+    detail_total = 0.0
+    for group in summary.groups:
+        for subcategory in group.subcategories:
+            for transaction in subcategory.transactions:
+                amount = float(transaction.amount)
+                detail_total += amount
+                detail.append(
+                    (
+                        transaction.transaction_date,
+                        transaction.normalized_name or "",
+                        transaction.transaction_detail,
+                        transaction.institution,
+                        transaction.source_file,
+                        transaction.transaction_type,
+                        transaction.direction,
+                        transaction.main_category_label or group.label,
+                        transaction.subcategory_label or subcategory.label,
+                        amount,
+                        transaction.category_status,
+                        transaction.review_status,
+                    )
+                )
+                row_number = detail.max_row
+                detail.cell(row_number, 1).number_format = "yyyy-mm-dd"
+                detail.cell(row_number, 10).number_format = CURRENCY_FORMAT
+                for cell in detail[row_number]:
+                    cell.border = Border(bottom=thin)
+
+    total_row = detail.max_row + 2
+    detail.cell(total_row, 9, "TOTAL INCLUDED EXPENSES")
+    detail.cell(total_row, 10, detail_total)
+    for cell in detail[total_row]:
+        cell.font = Font(bold=True, color=BLACK)
+        cell.border = Border(top=medium, bottom=double)
+    detail.cell(total_row, 10).number_format = CURRENCY_FORMAT
+    detail.freeze_panes = "A2"
+    detail.auto_filter.ref = f"A1:L{max(1, detail.max_row - 2)}"
+    for column, width in {
+        "A": 13,
+        "B": 24,
+        "C": 42,
+        "D": 20,
+        "E": 28,
+        "F": 24,
+        "G": 12,
+        "H": 32,
+        "I": 30,
+        "J": 16,
+        "K": 20,
+        "L": 18,
+    }.items():
+        detail.column_dimensions[column].width = width
+
     output = BytesIO()
     workbook.save(output)
     return ExportedWorkbook(content=output.getvalue(), filename=_safe_filename(summary))
@@ -105,7 +180,9 @@ def export_expense_summary(summary: ExpenseSummaryResponse) -> ExportedWorkbook:
 def inspect_expense_summary_workbook(content: bytes, *, summary_preview_path: Path | None = None) -> dict:
     workbook = load_workbook(BytesIO(content), data_only=False)
     sheet = workbook["Summary"]
+    detail = workbook["Transaction Detail"]
     values = [[cell.value for cell in row] for row in sheet.iter_rows()]
+    detail_values = [[cell.value for cell in row] for row in detail.iter_rows()]
     formulas = [
         [cell.value if isinstance(cell.value, str) and cell.value.startswith("=") else None for cell in row]
         for row in sheet.iter_rows()
@@ -115,12 +192,13 @@ def inspect_expense_summary_workbook(content: bytes, *, summary_preview_path: Pa
         if isinstance(value, str) and value.startswith("#")
     ]
     styles = []
-    for row_cells in sheet.iter_rows():
-        for cell in row_cells:
-            for color in (cell.font.color, cell.fill.fgColor):
-                rgb = getattr(color, "rgb", None)
-                if rgb:
-                    styles.append({"value": str(rgb)[-6:]})
+    for inspected_sheet in (sheet, detail):
+        for row_cells in inspected_sheet.iter_rows():
+            for cell in row_cells:
+                for color in (cell.font.color, cell.fill.fgColor):
+                    rgb = getattr(color, "rgb", None)
+                    if rgb:
+                        styles.append({"value": str(rgb)[-6:]})
     if summary_preview_path is not None:
         summary_preview_path.parent.mkdir(parents=True, exist_ok=True)
         summary_preview_path.write_text(
@@ -130,8 +208,9 @@ def inspect_expense_summary_workbook(content: bytes, *, summary_preview_path: Pa
     return {
         "sheets": workbook.sheetnames,
         "summaryValues": values,
+        "detailValues": detail_values,
         "summaryFormulas": formulas,
         "formulaErrors": formula_errors,
         "computedStyles": "\n".join(json.dumps(style) for style in styles),
-        "sheetInspection": "Summary",
+        "sheetInspection": "Summary, Transaction Detail",
     }

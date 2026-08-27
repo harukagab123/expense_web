@@ -158,7 +158,11 @@ def bulk_update_transaction_types(
 
 
 def reset_machine_type(transaction: Transaction) -> None:
-    if transaction.user_edited_type:
+    # A user-confirmed category is downstream evidence that the current type is
+    # intentionally expense-eligible. Invalidating that type after a name/detail
+    # correction would also erase the manual category through
+    # reset_category_for_type_change(). Keep both user-authoritative fields intact.
+    if transaction.user_edited_type or transaction.user_edited_category:
         return
     transaction.transaction_type = TYPE_UNKNOWN
     transaction.type_confidence = 0.0

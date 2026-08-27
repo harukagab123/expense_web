@@ -13,7 +13,7 @@ The authoritative version is `APP_VERSION` in `backend/app/version.py`. Use sema
 7. Scan the artifact for `.env`, tokens, keys, passwords, developer paths, databases, statements, logs, backups, diagnostics, and exports.
 8. Distribute the signed installer through a private channel. Never add private-repository credentials to the application.
 
-The installer uses per-user application files and preserves `%LOCALAPPDATA%\PersonalFinanceManager` during uninstall. When updating an existing install, it runs `PersonalFinanceManager.exe --prepare-update <version>` and aborts if a validated safety backup cannot be created.
+The installer uses per-user application files and preserves `%LOCALAPPDATA%\PersonalFinanceManager` during uninstall. When updating an existing install, it runs `PersonalFinanceManager.exe --prepare-update <version>` and aborts if a validated safety backup cannot be created. After that backup succeeds, setup closes the windowless application before replacing files. Uninstall uses the same named-process handoff so locked program files are removed without deleting user data.
 
 The portable release build recognizes the repository `data/app.db` and `storage/files` layout when run from `outputs/release`. For a different legacy location, set `PFM_LEGACY_ROOT` only for the first launch. The verified copy is placed in the per-user directory; the legacy originals are never deleted.
 

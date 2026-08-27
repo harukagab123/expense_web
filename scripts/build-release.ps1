@@ -45,8 +45,19 @@ $PortableZip = Join-Path $Release "PersonalFinanceManager-$Version-Portable.zip"
 Compress-Archive -Force -LiteralPath (Join-Path $Release "PersonalFinanceManager.exe"), (Join-Path $ProjectRoot "docs\USER_GUIDE.md") -DestinationPath $PortableZip
 
 $Inno = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-if ($Inno) {
-    & $Inno.Source "/DMyAppVersion=$Version" (Join-Path $ProjectRoot "packaging\PersonalFinanceManager.iss")
+$InnoPath = if ($Inno) { $Inno.Source } else { $null }
+if (!$InnoPath) {
+    $InnoCandidates = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+        (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    if ($InnoCandidates) {
+        $InnoPath = $InnoCandidates | Select-Object -First 1
+    }
+}
+if ($InnoPath) {
+    & $InnoPath "/DMyAppVersion=$Version" (Join-Path $ProjectRoot "packaging\PersonalFinanceManager.iss")
     if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
 } else {
     Write-Warning "Inno Setup was not found. Portable package built; installer was not built."

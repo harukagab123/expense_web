@@ -129,6 +129,34 @@ def test_edit_normalized_name_preserves_system_suggestion_and_survives_renormali
     assert saved["original_normalized_name"] == "Amazon"
 
 
+def test_edit_normalized_name_preserves_manual_category_authority(client: TestClient) -> None:
+    statement, _ = upload_detect_extract(client)
+    client.post(f"/api/statements/{statement['id']}/normalize-transactions")
+    client.post(f"/api/statements/{statement['id']}/classify-transaction-types")
+    categorized = client.post(f"/api/statements/{statement['id']}/categorize-transactions")
+    chevron = by_detail(categorized.json()["transactions"], "CHEVRON 0094821 FREMONT CA")
+
+    category_edit = client.patch(
+        f"/api/transactions/{chevron['id']}/category",
+        json={"main_category": "PROFIT_LOSS_BUSINESS", "subcategory": "BUSINESS_OFFICE_EXPENSE"},
+    )
+    name_edit = client.patch(
+        f"/api/transactions/{chevron['id']}/normalization",
+        json={"normalized_name": "Chevron Business Fuel"},
+    )
+
+    assert category_edit.status_code == 200, category_edit.text
+    assert name_edit.status_code == 200, name_edit.text
+    saved = name_edit.json()
+    assert saved["normalized_name"] == "Chevron Business Fuel"
+    assert saved["transaction_type"] == "EXPENSE"
+    assert saved["user_edited_type"] is False
+    assert saved["main_category"] == "PROFIT_LOSS_BUSINESS"
+    assert saved["subcategory"] == "BUSINESS_OFFICE_EXPENSE"
+    assert saved["category_status"] == "USER_CONFIRMED"
+    assert saved["user_edited_category"] is True
+
+
 def test_user_future_rule_is_saved_and_outprioritizes_default_rule(client: TestClient) -> None:
     statement, _ = upload_detect_extract(client)
     first = client.post(

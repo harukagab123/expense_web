@@ -272,6 +272,7 @@ EXPENSE_RULES: tuple[DeterministicCategoryRule, ...] = (
             re.compile(r"\bCONSTRUCTION\s+MATERIALS?\b"),
             re.compile(r"\bRAW\s+MATERIAL(?:S|\s+SUPPLY)\b"),
             re.compile(r"\bPROJECT\s+(?:CONSTRUCTION\s+)?MATERIAL(?:S|\s+SUPPLY)\b"),
+            re.compile(r"\bMATERIALS?\s+SUPPL(?:Y|IES)\b"),
         ),
     ),
     DeterministicCategoryRule(

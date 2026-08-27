@@ -275,7 +275,7 @@ def test_credit_card_payment_does_not_double_count_underlying_purchases(client: 
     assert payload["grand_total"] == FIXTURE["expected"]["grand_total"]
 
 
-def test_excel_export_reopens_as_summary_only_without_transaction_detail(
+def test_excel_export_reopens_with_summary_and_reconciling_transaction_detail(
     client: TestClient,
 ) -> None:
     from app.services.expense_summary.export import inspect_expense_summary_workbook
@@ -288,8 +288,8 @@ def test_excel_export_reopens_as_summary_only_without_transaction_detail(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     inspection = inspect_expense_summary_workbook(response.content)
-    assert inspection["sheets"] == ["Summary"]
-    assert "Transaction Detail" not in inspection["sheetInspection"]
+    assert inspection["sheets"] == ["Summary", "Transaction Detail"]
+    assert "Transaction Detail" in inspection["sheetInspection"]
     assert not any(
         error in inspection["formulaErrors"]
         for error in ("#REF!", "#DIV/0!", "#VALUE!", "#NAME?", "#N/A")
@@ -307,8 +307,31 @@ def test_excel_export_reopens_as_summary_only_without_transaction_detail(
     assert Decimal(str(gas_row[1])) == Decimal(FIXTURE["expected"]["subcategory_totals"]["AUTO_GAS"])
     summary_labels = [row[0] for row in inspection["summaryValues"] if row and row[0]]
     assert summary_labels.index("Education & Learning") < summary_labels.index("Other Supplies")
-    exported_text = " ".join(str(value) for row in inspection["summaryValues"] for value in row if value)
-    assert "CHEVRON SYNTHETIC" not in exported_text
-    assert "chase-synthetic.pdf" not in exported_text
+    detail_headers = inspection["detailValues"][0]
+    assert detail_headers == [
+        "Date",
+        "Name",
+        "Transaction Detail",
+        "Institution",
+        "Source File",
+        "Type",
+        "Direction",
+        "Main Category",
+        "Subcategory",
+        "Amount",
+        "Category Status",
+        "Review Status",
+    ]
+    detail_rows = inspection["detailValues"][1:]
+    detail_total_row = next(row for row in detail_rows if row[8] == "TOTAL INCLUDED EXPENSES")
+    assert Decimal(str(detail_total_row[9])) == Decimal(FIXTURE["expected"]["grand_total"])
+    transaction_rows = [row for row in detail_rows if isinstance(row[0], date)]
+    assert len(transaction_rows) == FIXTURE["expected"]["contributing_transaction_count"]
+    assert sum(Decimal(str(row[9])) for row in transaction_rows) == Decimal(
+        FIXTURE["expected"]["grand_total"]
+    )
+    exported_text = " ".join(str(value) for row in inspection["detailValues"] for value in row if value)
+    assert "CHEVRON SYNTHETIC" in exported_text
+    assert "chase-synthetic.pdf" in exported_text
     workbook_colors = set(re.findall(r'"value":"([0-9A-F]{6,8})"', inspection["computedStyles"]))
     assert workbook_colors <= {"000000", "FFFFFF"}
