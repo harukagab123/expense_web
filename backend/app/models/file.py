@@ -21,6 +21,7 @@ class StoredFile(Base):
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_filename: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     source_file_available: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=True)

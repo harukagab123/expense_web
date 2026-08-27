@@ -38,7 +38,7 @@ def test_upload_file_preserves_display_name_and_uses_unique_storage_name(client:
     folder = create_folder(client, "Uploads")
 
     first = upload_file(client, "Chase.pdf", b"%PDF-1.4\n%%EOF", "application/pdf", folder["id"])
-    second = upload_file(client, "Capital One.pdf", b"%PDF-1.4\n%%EOF", "application/pdf", folder["id"])
+    second = upload_file(client, "Capital One.pdf", b"%PDF-1.4\nCapital One\n%%EOF", "application/pdf", folder["id"])
 
     assert first["display_name"] == "Chase.pdf"
     assert first["original_filename"] == "Chase.pdf"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import UTC, datetime
+from hashlib import sha256
 import logging
 from pathlib import Path
 from uuid import uuid4
@@ -98,6 +99,23 @@ def ensure_file_name_available(
         statement = statement.where(StoredFile.id != exclude_file_id)
     if session.execute(statement).scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="A file with that name already exists here.")
+
+
+def ensure_file_content_available(
+    session: Session,
+    content_sha256: str,
+    folder_id: int | None,
+    exclude_file_id: int | None = None,
+) -> None:
+    statement = select(StoredFile).where(StoredFile.content_sha256 == content_sha256)
+    if folder_id is None:
+        statement = statement.where(StoredFile.folder_id.is_(None))
+    else:
+        statement = statement.where(StoredFile.folder_id == folder_id)
+    if exclude_file_id is not None:
+        statement = statement.where(StoredFile.id != exclude_file_id)
+    if session.execute(statement).scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail="This file has already been uploaded here.")
 
 
 def create_folder(session: Session, name: str, parent_folder_id: int | None) -> Folder:
@@ -205,6 +223,7 @@ async def upload_one_file(
     target_path = _storage_root() / stored_filename
     max_upload_bytes = get_settings().max_upload_bytes
     total_size = 0
+    content_hash = sha256()
 
     try:
         with target_path.open("wb") as output:
@@ -212,6 +231,7 @@ async def upload_one_file(
                 total_size += len(chunk)
                 if total_size > max_upload_bytes:
                     raise HTTPException(status_code=413, detail="File exceeds the configured upload size limit.")
+                content_hash.update(chunk)
                 output.write(chunk)
     except HTTPException:
         target_path.unlink(missing_ok=True)
@@ -221,12 +241,20 @@ async def upload_one_file(
         target_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="File could not be stored.") from exc
 
+    content_sha256 = content_hash.hexdigest()
+    try:
+        ensure_file_content_available(session, content_sha256, folder_id)
+    except HTTPException:
+        target_path.unlink(missing_ok=True)
+        raise
+
     stored_file = StoredFile(
         folder_id=folder_id,
         original_filename=original_filename,
         display_name=original_filename,
         stored_filename=stored_filename,
         storage_path=relative_storage_path,
+        content_sha256=content_sha256,
         mime_type=upload.content_type or "application/octet-stream",
         file_size=total_size,
     )
@@ -263,6 +291,13 @@ def update_file(
         raise HTTPException(status_code=400, detail="Invalid folder.")
     validate_folder_parent(session, next_folder_id)
     ensure_file_name_available(session, next_display_name, next_folder_id, exclude_file_id=stored_file.id)
+    if stored_file.content_sha256:
+        ensure_file_content_available(
+            session,
+            stored_file.content_sha256,
+            next_folder_id,
+            exclude_file_id=stored_file.id,
+        )
 
     stored_file.display_name = next_display_name
     stored_file.folder_id = next_folder_id

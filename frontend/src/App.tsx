@@ -14,12 +14,14 @@ import {
   deleteFolder,
   deleteStoredFile,
   excludeTransaction,
+  expenseSummaryExportUrl,
   fileDownloadUrl,
   filePreviewUrl,
   getAttention,
   getAttentionCount,
   getCategoryCatalog,
   getCategoryRules,
+  getExpenseSummary,
   getFileManagerTree,
   getStatementForFile,
   getStatementTerms,
@@ -64,6 +66,10 @@ import type {
   TransactionPayload,
   TransactionReviewBulkPayload,
   TransactionTypeValue,
+  ExpenseSummary,
+  SummaryGroup,
+  SummarySubcategory,
+  SummaryTransaction,
 } from "./types/fileManager";
 
 type MoveDialogState =
@@ -147,6 +153,14 @@ type CategoryFilter =
   | "not_applicable";
 
 type InclusionFilter = "all" | "included" | "excluded" | "needs_review" | "reviewed";
+
+type AppView = "files" | "summary";
+type SummaryMode = "tax_year" | "custom";
+type SummarySortBy = "date" | "name" | "amount" | "source";
+type SummaryDrillDown =
+  | { type: "subcategory"; group: SummaryGroup; subcategory: SummarySubcategory }
+  | { type: "review"; transactions: SummaryTransaction[] }
+  | null;
 
 type CategoryFormValues = {
   main_category: CategoryMainValue;
@@ -1018,6 +1032,7 @@ export default function App() {
   const [tree, setTree] = useState<FileManagerTree>(emptyTree);
   const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([]);
   const [selected, setSelected] = useState<SelectedItem>({ type: "root" });
+  const [activeView, setActiveView] = useState<AppView>("files");
   const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -1231,16 +1246,19 @@ export default function App() {
 
   function selectFolder(folderId: number) {
     setAttentionFocusTarget(null);
+    setActiveView("files");
     setSelected({ type: "folder", id: folderId });
   }
 
   function selectFile(fileId: number) {
     setAttentionFocusTarget(null);
+    setActiveView("files");
     setSelected({ type: "file", id: fileId });
   }
 
   function selectRoot() {
     setAttentionFocusTarget(null);
+    setActiveView("files");
     setSelected({ type: "root" });
   }
 
@@ -1279,6 +1297,7 @@ export default function App() {
     }
 
     setExpandedFolders((current) => new Set([...current, ...item.folder_path.map((folder) => folder.id)]));
+    setActiveView("files");
     setSelected({ type: "file", id: item.file_id });
     clearSearch();
     setIsAttentionOpen(false);
@@ -1293,6 +1312,34 @@ export default function App() {
     });
     setNotice(`Opened ${file.display_name} for ${item.title.toLowerCase()}.`);
     scrollTreeKeyIntoView(`file-${item.file_id}`);
+  }
+
+  function handleOpenSummaryTransaction(transaction: SummaryTransaction) {
+    if (!transaction.source_file_available) {
+      setNotice("Source file no longer retained. Transaction record preserved in Summary.");
+      return;
+    }
+    const file = findFile(tree.folders, tree.files, transaction.file_id);
+    if (!file) {
+      setNotice("The source file is not currently available in the File Manager.");
+      void loadTree();
+      return;
+    }
+    const ancestors = file.folder_id ? folderPath(tree.folders, file.folder_id) : [];
+    setExpandedFolders((current) => new Set([...current, ...ancestors.map((folder) => folder.id)]));
+    setActiveView("files");
+    setSelected({ type: "file", id: file.id });
+    setAttentionFocusTarget({
+      attentionId: `summary:transaction:${transaction.id}`,
+      fileId: file.id,
+      statementId: transaction.statement_id,
+      transactionId: transaction.id,
+      targetSection: "transaction",
+      targetField: "transaction_detail",
+      requestedAt: Date.now(),
+    });
+    setNotice(`Opened ${file.display_name} from Summary.`);
+    scrollTreeKeyIntoView(`file-${file.id}`);
   }
 
   function openNameDialog(dialog: Exclude<NameDialogState, null>) {
@@ -1527,6 +1574,17 @@ export default function App() {
         <div className="top-bar__inner">
           <h1>Personal Financial File Manager</h1>
           <div className="top-actions">
+            <button
+              aria-current={activeView === "summary" ? "page" : undefined}
+              className={activeView === "summary" ? "primary-navigation--active" : ""}
+              onClick={() => {
+                setAttentionFocusTarget(null);
+                setActiveView("summary");
+              }}
+              type="button"
+            >
+              Summary
+            </button>
             <div className="attention-menu" ref={attentionRef}>
               <NotificationBell
                 attention={attention}
@@ -1559,7 +1617,12 @@ export default function App() {
         <button onClick={selectRoot} type="button">
           My Files
         </button>
-        {breadcrumbs.map((folder) => (
+        {activeView === "summary" ? (
+          <span>
+            <span className="breadcrumb-separator">/</span>
+            <button aria-current="page" onClick={() => setActiveView("summary")} type="button">Summary</button>
+          </span>
+        ) : breadcrumbs.map((folder) => (
           <span key={folder.id}>
             <span className="breadcrumb-separator">/</span>
             <button onClick={() => selectFolder(folder.id)} type="button">
@@ -1567,7 +1630,7 @@ export default function App() {
             </button>
           </span>
         ))}
-        {selectedFile ? (
+        {activeView === "files" && selectedFile ? (
           <span>
             <span className="breadcrumb-separator">/</span>
             <button onClick={() => selectFile(selectedFile.id)} type="button">
@@ -1697,7 +1760,11 @@ export default function App() {
           ) : null}
         </aside>
 
-        <section className="details-pane" aria-label="Selected item details">
+        <section className="details-pane" aria-label={activeView === "summary" ? "Expense summary" : "Selected item details"}>
+          {activeView === "summary" ? (
+            <SummaryPage onOpenTransaction={handleOpenSummaryTransaction} />
+          ) : (
+            <>
           <div className="pane-header">
             <div>
               <h2>
@@ -1782,6 +1849,8 @@ export default function App() {
               modifiedAt={selectedFolder?.updated_at}
               name={selectedFolder?.name ?? "My Files"}
             />
+          )}
+            </>
           )}
         </section>
       </section>
@@ -4260,6 +4329,412 @@ function LearnedRulesDialog({
           </form>
         ) : null}
       </section>
+    </div>
+  );
+}
+
+function SummaryPage({ onOpenTransaction }: { onOpenTransaction: (transaction: SummaryTransaction) => void }) {
+  const [summary, setSummary] = useState<ExpenseSummary | null>(null);
+  const [mode, setMode] = useState<SummaryMode>("tax_year");
+  const [taxYear, setTaxYear] = useState<number | null>(null);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [drillDown, setDrillDown] = useState<SummaryDrillDown>(null);
+  const [detailSearch, setDetailSearch] = useState("");
+  const [sortBy, setSortBy] = useState<SummarySortBy>("date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const requestIdRef = useRef(0);
+
+  const loadSummary = useCallback(async (
+    query: { taxYear: number } | { startDate: string; endDate: string } | Record<string, never> = {},
+  ) => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setIsLoading(true);
+    setError("");
+    try {
+      const nextSummary = await getExpenseSummary(query);
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
+      setSummary(nextSummary);
+      if (nextSummary.period.mode === "TAX_YEAR") {
+        setMode("tax_year");
+        setTaxYear(nextSummary.period.tax_year);
+      }
+      setStartDate(nextSummary.period.start_date);
+      setEndDate(nextSummary.period.end_date);
+      setDrillDown(null);
+    } catch (caught) {
+      if (requestIdRef.current === requestId) {
+        setError(caught instanceof Error ? caught.message : "Expense summary could not be loaded.");
+      }
+    } finally {
+      if (requestIdRef.current === requestId) {
+        setIsLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSummary();
+  }, [loadSummary]);
+
+  const detailTransactions = useMemo(() => {
+    const source = drillDown?.type === "subcategory"
+      ? drillDown.subcategory.transactions
+      : drillDown?.type === "review"
+        ? drillDown.transactions
+        : [];
+    const query = detailSearch.trim().toLocaleLowerCase();
+    const filtered = query
+      ? source.filter((transaction) => [
+          transaction.normalized_name,
+          transaction.transaction_detail,
+          transaction.institution,
+          transaction.source_file,
+        ].some((value) => value?.toLocaleLowerCase().includes(query)))
+      : source;
+    return [...filtered].sort((left, right) => {
+      let comparison = 0;
+      if (sortBy === "date") {
+        comparison = left.transaction_date.localeCompare(right.transaction_date);
+      } else if (sortBy === "name") {
+        comparison = (left.normalized_name ?? left.transaction_detail).localeCompare(
+          right.normalized_name ?? right.transaction_detail,
+          undefined,
+          { sensitivity: "base" },
+        );
+      } else if (sortBy === "amount") {
+        comparison = moneyToCents(left.amount) - moneyToCents(right.amount);
+      } else {
+        comparison = `${left.institution} ${left.source_file}`.localeCompare(
+          `${right.institution} ${right.source_file}`,
+          undefined,
+          { sensitivity: "base" },
+        );
+      }
+      if (comparison === 0) {
+        comparison = left.id - right.id;
+      }
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [detailSearch, drillDown, sortBy, sortDirection]);
+
+  const drillDownTotalCents = useMemo(() => {
+    const source = drillDown?.type === "subcategory"
+      ? drillDown.subcategory.transactions
+      : drillDown?.type === "review"
+        ? drillDown.transactions
+        : [];
+    return source.reduce((total, transaction) => total + moneyToCents(transaction.amount), 0);
+  }, [drillDown]);
+
+  const availableYears = useMemo(() => {
+    const years = new Set(summary?.period.available_years ?? []);
+    if (taxYear !== null) {
+      years.add(taxYear);
+    }
+    return [...years].sort((left, right) => right - left);
+  }, [summary?.period.available_years, taxYear]);
+
+  function currentQuery(): { taxYear: number } | { startDate: string; endDate: string } | null {
+    if (mode === "tax_year") {
+      return taxYear === null ? null : { taxYear };
+    }
+    if (!startDate || !endDate) {
+      setError("Start date and end date are required.");
+      return null;
+    }
+    if (startDate > endDate) {
+      setError("Start date must be on or before end date.");
+      return null;
+    }
+    return { startDate, endDate };
+  }
+
+  function refresh() {
+    const query = currentQuery();
+    if (query) {
+      void loadSummary(query);
+    }
+  }
+
+  function exportWorkbook() {
+    const query = currentQuery();
+    if (!query) {
+      return;
+    }
+    const link = document.createElement("a");
+    link.href = expenseSummaryExportUrl(query);
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  function openSubcategory(group: SummaryGroup, subcategory: SummarySubcategory) {
+    setDetailSearch("");
+    setSortBy("date");
+    setSortDirection("asc");
+    setDrillDown({ type: "subcategory", group, subcategory });
+  }
+
+  function openReview() {
+    if (!summary) {
+      return;
+    }
+    setDetailSearch("");
+    setSortBy("date");
+    setSortDirection("asc");
+    setDrillDown({ type: "review", transactions: summary.needs_review_transactions });
+  }
+
+  const periodTransactionCount = summary
+    ? summary.metrics.included_eligible_count + summary.metrics.not_applicable_count + summary.metrics.unselected_count
+    : 0;
+
+  return (
+    <div className="summary-page">
+      <header className="summary-header">
+        <div>
+          <p className="summary-eyebrow">Combined expense report</p>
+          <h2>{summary ? `${summary.period.label} Expense Summary` : "Expense Summary"}</h2>
+          <p>Selected, eligible transactions from every analyzed statement.</p>
+        </div>
+        <div className={`summary-readiness ${summary?.readiness === "REVIEW_REQUIRED" ? "summary-readiness--review" : ""}`}>
+          {summary?.readiness === "REVIEW_REQUIRED" ? "Review Required" : "Summary Ready"}
+        </div>
+      </header>
+
+      <section className="summary-controls" aria-label="Reporting period">
+        <label>
+          <span>Reporting period</span>
+          <select onChange={(event) => setMode(event.target.value as SummaryMode)} value={mode}>
+            <option value="tax_year">Tax Year</option>
+            <option value="custom">Custom Date Range</option>
+          </select>
+        </label>
+        {mode === "tax_year" ? (
+          <label>
+            <span>Tax year</span>
+            <select
+              disabled={availableYears.length === 0}
+              onChange={(event) => setTaxYear(Number(event.target.value))}
+              value={taxYear ?? ""}
+            >
+              {availableYears.map((year) => <option key={year} value={year}>{year}</option>)}
+            </select>
+          </label>
+        ) : (
+          <>
+            <label>
+              <span>Start date</span>
+              <input onChange={(event) => setStartDate(event.target.value)} type="date" value={startDate} />
+            </label>
+            <label>
+              <span>End date</span>
+              <input onChange={(event) => setEndDate(event.target.value)} type="date" value={endDate} />
+            </label>
+          </>
+        )}
+        <div className="summary-control-actions">
+          <button disabled={isLoading} onClick={refresh} type="button">{isLoading ? "Refreshing..." : "Refresh"}</button>
+          <button disabled={!summary || isLoading} onClick={exportWorkbook} type="button">Export Excel</button>
+        </div>
+      </section>
+
+      {error ? <p className="summary-message summary-message--error" role="alert">{error}</p> : null}
+      {isLoading && !summary ? <div className="summary-message">Loading expense summary...</div> : null}
+
+      {summary ? (
+        <>
+          <section className="summary-overview" aria-label="Summary overview">
+            <article>
+              <span>Included Expenses</span>
+              <strong>{formatMoney(summary.grand_total)}</strong>
+            </article>
+            <article>
+              <span>Selected Transactions</span>
+              <strong>{summary.metrics.contributing_transaction_count}</strong>
+            </article>
+            <button
+              className={summary.metrics.needs_review_count > 0 ? "summary-overview__review" : ""}
+              disabled={summary.metrics.needs_review_count === 0}
+              onClick={openReview}
+              type="button"
+            >
+              <span>Needs Review</span>
+              <strong>{summary.metrics.needs_review_count}</strong>
+            </button>
+            <article>
+              <span>Statements / Sources</span>
+              <strong>{summary.metrics.source_count}</strong>
+            </article>
+          </section>
+
+          {summary.metrics.needs_review_count > 0 ? (
+            <button className="summary-review-warning" onClick={openReview} type="button">
+              <strong>{summary.metrics.needs_review_count} included {summary.metrics.needs_review_count === 1 ? "transaction needs" : "transactions need"} review</strong>
+              <span>Open the unresolved transactions and return to their source records.</span>
+            </button>
+          ) : null}
+
+          {periodTransactionCount === 0 ? (
+            <div className="summary-message">No analyzed transactions available for this reporting period.</div>
+          ) : summary.metrics.included_eligible_count === 0 ? (
+            <div className="summary-message">No included expenses for this reporting period.</div>
+          ) : summary.metrics.contributing_transaction_count === 0 ? (
+            <div className="summary-message summary-message--review">Included transactions require category review before they can contribute to totals.</div>
+          ) : null}
+
+          <div className="summary-groups">
+            {summary.groups.map((group) => (
+              <section className="summary-group" key={group.id}>
+                <header>
+                  <div>
+                    <h3>{group.label}</h3>
+                    <span>{group.transaction_count} {group.transaction_count === 1 ? "transaction" : "transactions"}</span>
+                  </div>
+                  <strong>{formatMoney(group.total)}</strong>
+                </header>
+                <div className="summary-category-list">
+                  {group.subcategories.map((subcategory) => (
+                    <button
+                      className="summary-category-row"
+                      key={subcategory.id}
+                      onClick={() => openSubcategory(group, subcategory)}
+                      type="button"
+                    >
+                      <span className="summary-category-row__name">{subcategory.label}</span>
+                      <span>{subcategory.transaction_count} {subcategory.transaction_count === 1 ? "transaction" : "transactions"}</span>
+                      <strong>{formatMoney(subcategory.total)}</strong>
+                      <span aria-hidden="true" className="summary-category-row__arrow">›</span>
+                    </button>
+                  ))}
+                </div>
+                <footer>
+                  <strong>Total {group.label}</strong>
+                  <strong>{formatMoney(group.total)}</strong>
+                </footer>
+              </section>
+            ))}
+          </div>
+
+          <div className="summary-grand-total">
+            <div>
+              <span>Total Included Expenses</span>
+              <small>{summary.metrics.contributing_transaction_count} selected, eligible transactions</small>
+            </div>
+            <strong>{formatMoney(summary.grand_total)}</strong>
+          </div>
+        </>
+      ) : null}
+
+      {drillDown ? (
+        <div className="modal-backdrop summary-detail-backdrop" role="presentation">
+          <section aria-modal="true" className="summary-detail-dialog" role="dialog">
+            <header className="summary-detail-header">
+              <div>
+                <p>{drillDown.type === "subcategory" ? drillDown.group.label : "Included Expenses"}</p>
+                <h2>{drillDown.type === "subcategory" ? drillDown.subcategory.label : "Needs Review"}</h2>
+                <span>
+                  {drillDown.type === "subcategory"
+                    ? `${drillDown.subcategory.transaction_count} contributing ${drillDown.subcategory.transaction_count === 1 ? "transaction" : "transactions"}`
+                    : `${drillDown.transactions.length} unresolved included ${drillDown.transactions.length === 1 ? "transaction" : "transactions"}`}
+                </span>
+              </div>
+              <div className="summary-detail-total">
+                <span>{drillDown.type === "subcategory" ? "Drill-down total" : "Unresolved amount"}</span>
+                <strong>{formatMoneyCents(drillDownTotalCents)}</strong>
+              </div>
+              <button autoFocus onClick={() => setDrillDown(null)} type="button">Close</button>
+            </header>
+
+            <div className="summary-detail-controls">
+              <label className="summary-detail-search">
+                <span>Search transactions</span>
+                <input
+                  onChange={(event) => setDetailSearch(event.target.value)}
+                  placeholder="Name, detail, institution, or source file"
+                  type="search"
+                  value={detailSearch}
+                />
+              </label>
+              <label>
+                <span>Sort by</span>
+                <select onChange={(event) => setSortBy(event.target.value as SummarySortBy)} value={sortBy}>
+                  <option value="date">Date</option>
+                  <option value="name">Name</option>
+                  <option value="amount">Amount</option>
+                  <option value="source">Source</option>
+                </select>
+              </label>
+              <label>
+                <span>Direction</span>
+                <select onChange={(event) => setSortDirection(event.target.value as "asc" | "desc")} value={sortDirection}>
+                  <option value="asc">Ascending</option>
+                  <option value="desc">Descending</option>
+                </select>
+              </label>
+            </div>
+
+            {detailTransactions.length === 0 ? (
+              <div className="summary-detail-empty">
+                {detailSearch ? "No contributing transactions match this search." : "No transactions contribute to this category."}
+              </div>
+            ) : (
+              <div className="summary-detail-table-wrap">
+                <table className="summary-detail-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th><th>Name</th><th>Transaction Detail</th><th>Source / Institution</th>
+                      <th>Source File</th><th>Amount</th><th>Category</th><th>Subcategory</th><th>Review Status</th><th>Source Record</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailTransactions.map((transaction) => (
+                      <tr key={transaction.id}>
+                        <td>{formatDateOnly(transaction.transaction_date)}</td>
+                        <td>{transaction.normalized_name ?? "—"}</td>
+                        <td>{transaction.transaction_detail}</td>
+                        <td>{transaction.institution}</td>
+                        <td>
+                          <span>{transaction.source_file}</span>
+                          {!transaction.source_file_available ? <small>Source file no longer retained. Transaction record preserved.</small> : null}
+                        </td>
+                        <td className="summary-detail-table__amount">{formatMoney(transaction.amount)}</td>
+                        <td>{transaction.main_category_label ?? "Needs Review"}</td>
+                        <td>{transaction.subcategory_label ?? "Needs Review"}</td>
+                        <td>{transaction.review_status === "REVIEWED" ? "Reviewed" : labelFor({}, transaction.category_status)}</td>
+                        <td>
+                          <button
+                            disabled={!transaction.source_file_available}
+                            onClick={() => onOpenTransaction(transaction)}
+                            type="button"
+                          >
+                            {transaction.source_file_available ? "Open Transaction" : "Unavailable"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan={5}>Exact total</td>
+                      <td className="summary-detail-table__amount">{formatMoneyCents(drillDownTotalCents)}</td>
+                      <td colSpan={4}></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+            {detailSearch ? <p className="summary-detail-filter-note">Showing {detailTransactions.length} of {drillDown.type === "subcategory" ? drillDown.subcategory.transactions.length : drillDown.transactions.length} transactions. The exact total above is not changed by search.</p> : null}
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

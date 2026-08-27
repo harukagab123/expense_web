@@ -162,6 +162,70 @@ export type CategorySubcategoryValue =
   | "BUSINESS_MEDICAL"
   | "BUSINESS_EDUCATION_LEARNING";
 
+export type SummaryPeriod = {
+  mode: "TAX_YEAR" | "CUSTOM";
+  label: string;
+  start_date: string;
+  end_date: string;
+  tax_year: number | null;
+  available_years: number[];
+};
+
+export type SummaryTransaction = {
+  id: number;
+  statement_id: number;
+  file_id: number;
+  transaction_date: string;
+  normalized_name: string | null;
+  transaction_detail: string;
+  institution: string;
+  source_file: string;
+  source_file_available: boolean;
+  transaction_type: string;
+  direction: string;
+  main_category: string | null;
+  main_category_label: string | null;
+  subcategory: string | null;
+  subcategory_label: string | null;
+  amount: string;
+  category_status: string;
+  review_status: string;
+};
+
+export type SummarySubcategory = {
+  id: string;
+  label: string;
+  priority: number;
+  transaction_count: number;
+  total: string;
+  transactions: SummaryTransaction[];
+};
+
+export type SummaryGroup = {
+  id: string;
+  label: string;
+  transaction_count: number;
+  total: string;
+  subcategories: SummarySubcategory[];
+};
+
+export type ExpenseSummary = {
+  period: SummaryPeriod;
+  readiness: "SUMMARY_READY" | "REVIEW_REQUIRED";
+  grand_total: string;
+  metrics: {
+    included_eligible_count: number;
+    contributing_transaction_count: number;
+    needs_review_count: number;
+    source_count: number;
+    not_applicable_count: number;
+    unselected_count: number;
+    other_supplies_count: number;
+  };
+  groups: SummaryGroup[];
+  needs_review_transactions: SummaryTransaction[];
+};
+
 export type ReviewStatusValue = "PENDING" | "NEEDS_REVIEW" | "REVIEWED";
 
 export type StatementTransaction = {

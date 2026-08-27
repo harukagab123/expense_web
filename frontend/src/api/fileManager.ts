@@ -36,6 +36,7 @@ import type {
   TransactionReviewPayload,
   StoredFile,
   UploadBatchResponse,
+  ExpenseSummary,
 } from "../types/fileManager";
 
 type RequestOptions = RequestInit & {
@@ -376,4 +377,30 @@ export function fileDownloadUrl(fileId: number): string {
 
 export function filePreviewUrl(fileId: number): string {
   return `${apiConfig.baseUrl}/api/files/${fileId}/preview`;
+}
+
+export type SummaryQuery =
+  | { taxYear: number; startDate?: never; endDate?: never }
+  | { taxYear?: never; startDate: string; endDate: string }
+  | Record<string, never>;
+
+function summaryQueryString(query: SummaryQuery): string {
+  const params = new URLSearchParams();
+  if ("taxYear" in query && query.taxYear !== undefined) {
+    params.set("tax_year", String(query.taxYear));
+  }
+  if ("startDate" in query && query.startDate !== undefined) {
+    params.set("start_date", query.startDate);
+    params.set("end_date", query.endDate);
+  }
+  const value = params.toString();
+  return value ? `?${value}` : "";
+}
+
+export async function getExpenseSummary(query: SummaryQuery = {}): Promise<ExpenseSummary> {
+  return requestJson<ExpenseSummary>(`/api/summary${summaryQueryString(query)}`);
+}
+
+export function expenseSummaryExportUrl(query: SummaryQuery): string {
+  return `${apiConfig.baseUrl}/api/summary/export.xlsx${summaryQueryString(query)}`;
 }

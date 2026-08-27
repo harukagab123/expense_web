@@ -15,7 +15,7 @@ def upload_file(client: TestClient, filename: str, folder_id: int | None = None)
     response = client.post(
         "/api/files",
         data=data,
-        files=[("files", (filename, b"%PDF-1.4\n%%EOF", "application/pdf"))],
+        files=[("files", (filename, f"%PDF-1.4\n{filename}\n%%EOF".encode(), "application/pdf"))],
     )
     assert response.status_code == 200, response.text
     return response.json()["uploaded"][0]["file"]
