@@ -225,6 +225,20 @@ def test_interest_bank_fee_medical_office_meals_and_travel_rules() -> None:
     assert hotel.status == STATUS_NEEDS_REVIEW
 
 
+def test_clear_restaurant_names_do_not_fall_back_to_other_supplies() -> None:
+    examples = [
+        "TST*THE CRACK SHACK - LA Las Vegas NV",
+        "MANDALAY - HAZEL CAFC LAS VEGAS NV",
+        "IMA'S KUSINA HAYWARD HAYWARD CA",
+    ]
+
+    for detail in examples:
+        result = categorize(detail)
+        assert result.main_category == MAIN_PROFIT_LOSS_BUSINESS
+        assert result.subcategory == BUSINESS_TOTAL_MEALS
+        assert result.status == STATUS_NEEDS_REVIEW
+
+
 def test_telecom_requires_specific_context() -> None:
     comcast = categorize("COMCAST BUSINESS INTERNET", "EXPENSE", "OUTFLOW", "Comcast")
     verizon_generic = categorize("VERIZON WIRELESS", "EXPENSE", "OUTFLOW", "Verizon")

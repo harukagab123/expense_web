@@ -41,6 +41,8 @@ def categorize_transactions_for_statement(session: Session, statement_id: int) -
             transaction.category_status,
             transaction.category_rule_id,
         )
+        if transaction.user_edited_category:
+            continue
         if not is_category_eligible(transaction.transaction_type, transaction.direction):
             _apply_category_result(transaction, not_applicable_result(), now)
             transaction.user_edited_category = False
@@ -58,8 +60,6 @@ def categorize_transactions_for_statement(session: Session, statement_id: int) -
                     transaction.category_rule_id,
                 ),
             )
-            continue
-        if transaction.user_edited_category:
             continue
 
         result = categorize_transaction(

@@ -178,6 +178,21 @@ def test_extraction_is_idempotent_and_does_not_duplicate_rows(client: TestClient
     assert len(second.json()["transactions"]) == 5
 
 
+def test_extraction_count_remains_source_count_when_an_extracted_row_is_excluded(client: TestClient) -> None:
+    stored_file = upload_file(client, "chase-transactions.pdf", CHASE_TRANSACTION_TEXT)
+    statement = detect_statement(client, stored_file["id"])
+    extracted = client.post(f"/api/statements/{statement['id']}/extract-transactions")
+    assert extracted.status_code == 200, extracted.text
+
+    excluded = client.delete(f"/api/transactions/{extracted.json()['transactions'][0]['id']}")
+    assert excluded.status_code == 200, excluded.text
+
+    active = client.get(f"/api/statements/{statement['id']}/transactions")
+    assert active.status_code == 200, active.text
+    assert active.json()["latest_extraction"]["transaction_count"] == 5
+    assert len(active.json()["transactions"]) == 4
+
+
 def test_transaction_edit_preserves_original_values_and_persists(client: TestClient) -> None:
     stored_file = upload_file(client, "chase-transactions.pdf", CHASE_TRANSACTION_TEXT)
     statement = detect_statement(client, stored_file["id"])

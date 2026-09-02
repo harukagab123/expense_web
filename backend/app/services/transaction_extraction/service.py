@@ -145,7 +145,7 @@ def extract_transactions_for_statement(session: Session, statement_id: int) -> t
         _replace_unprotected_machine_transactions(session, statement.id, extraction.id, parse_result.transactions)
         active_transactions = _list_transactions(session, statement.id)
         review_count = sum(transaction.needs_review for transaction in active_transactions)
-        extraction.transaction_count = len(active_transactions)
+        extraction.transaction_count = len(parse_result.transactions)
         extraction.review_count = review_count
         extraction.status = _status_for_extraction(len(parse_result.transactions), review_count, parse_result.message)
         extraction.message = parse_result.message
@@ -483,7 +483,6 @@ def _refresh_latest_counts(session: Session, statement_id: int) -> None:
     if extraction is None:
         return
     active_transactions = _list_transactions(session, statement_id)
-    extraction.transaction_count = len(active_transactions)
     extraction.review_count = sum(transaction.needs_review for transaction in active_transactions)
 
 

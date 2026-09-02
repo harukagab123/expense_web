@@ -79,7 +79,12 @@ def analyze_statement_file(session: Session, file_id: int) -> StatementAnalysisR
         _fail(steps, STEP_EXTRACTION, extraction.message or "Transaction extraction failed.")
         _skip_after_failure(steps, STEP_EXTRACTION)
         return _response("FAILED", STEP_EXTRACTION, statement, extraction, transactions, steps, retention)
-    _complete(steps, STEP_EXTRACTION, f"{len(transactions)} transactions loaded.")
+    extracted_count = extraction.transaction_count
+    active_count = len(transactions)
+    extraction_message = f"{extracted_count} transactions extracted."
+    if active_count != extracted_count:
+        extraction_message += f" {active_count} active transactions loaded."
+    _complete(steps, STEP_EXTRACTION, extraction_message)
 
     _start(steps, STEP_TERMINOLOGY)
     try:

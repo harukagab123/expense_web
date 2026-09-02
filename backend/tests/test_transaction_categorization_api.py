@@ -273,6 +273,60 @@ def test_category_validation_excluded_rows_and_manual_rows(client: TestClient) -
     assert excluded_row["category_status"] == "CATEGORIZED"
 
 
+def test_recategorization_preserves_user_confirmed_category_for_unknown_outflow_and_summary(
+    client: TestClient,
+) -> None:
+    statement, _transactions = prepare_categorized_statement(client)
+    created = client.post(
+        f"/api/statements/{statement['id']}/transactions",
+        json={
+            "transaction_date": "2026-08-31",
+            "transaction_detail": "QA UNKNOWN OFFICE PURCHASE",
+            "amount": "13.34",
+            "direction": "OUTFLOW",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["transaction_type"] == "UNKNOWN"
+
+    edited = client.patch(
+        f"/api/transactions/{created.json()['id']}/category",
+        json={
+            "main_category": "PROFIT_LOSS_BUSINESS",
+            "subcategory": "BUSINESS_OFFICE_EXPENSE",
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["user_edited_category"] is True
+
+    before = client.get("/api/summary?tax_year=2026")
+    assert before.status_code == 200, before.text
+    assert created.json()["id"] in {
+        row["id"]
+        for group in before.json()["groups"]
+        for subcategory in group["subcategories"]
+        for row in subcategory["transactions"]
+    }
+
+    categorized = client.post(f"/api/statements/{statement['id']}/categorize-transactions")
+    assert categorized.status_code == 200, categorized.text
+    preserved = by_detail(categorized.json()["transactions"], "QA UNKNOWN OFFICE PURCHASE")
+    assert preserved["transaction_type"] == "UNKNOWN"
+    assert preserved["main_category"] == "PROFIT_LOSS_BUSINESS"
+    assert preserved["subcategory"] == "BUSINESS_OFFICE_EXPENSE"
+    assert preserved["category_status"] == "USER_CONFIRMED"
+    assert preserved["user_edited_category"] is True
+
+    after = client.get("/api/summary?tax_year=2026")
+    assert after.status_code == 200, after.text
+    assert preserved["id"] in {
+        row["id"]
+        for group in after.json()["groups"]
+        for subcategory in group["subcategories"]
+        for row in subcategory["transactions"]
+    }
+
+
 def set_normalized_name(client: TestClient, transaction: dict, normalized_name: str) -> dict:
     response = client.patch(
         f"/api/transactions/{transaction['id']}/normalization",

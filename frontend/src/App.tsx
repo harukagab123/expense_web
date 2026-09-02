@@ -3331,7 +3331,10 @@ function TransactionPanel({
         <div>
           <h3>Transactions</h3>
           <p>
-            {transactions.length} transactions extracted
+            {latestExtraction?.transaction_count ?? transactions.length} transactions extracted
+            {latestExtraction && latestExtraction.transaction_count !== transactions.length
+              ? ` - ${transactions.length} active`
+              : ""}
             {reviewCount > 0 ? ` - ${reviewCount} need review` : ""}
             {normalizationReviewCount > 0 ? ` - ${normalizationReviewCount} name review` : ""}
             {categoryReviewCount > 0 ? ` - ${categoryReviewCount} category review` : ""}

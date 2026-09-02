@@ -306,6 +306,9 @@ EXPENSE_RULES: tuple[DeterministicCategoryRule, ...] = (
             re.compile(r"\bCAFE\b"),
             re.compile(r"\bDINER\b"),
             re.compile(r"\bSTARBUCKS\b"),
+            re.compile(r"\bCRACK\s+SHACK\b"),
+            re.compile(r"\bCAFC\b"),
+            re.compile(r"\bKUSINA\b"),
             re.compile(
                 r"\b(?:HABIT(?:\s+BURGER)?|PANDA\s+EXPRESS|MCDONALD'?S|BURGER\s+KING|"
                 r"DOMINO'?S|SUBWAY|CHEESECAKE\s+FACTORY|BOUDIN(?:\s+BAKERY)?|"
